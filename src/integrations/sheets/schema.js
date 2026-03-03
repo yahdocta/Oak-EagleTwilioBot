@@ -10,6 +10,7 @@ function toSheetRow(outcome) {
   return [
     outcome.lead_name || "",
     outcome.lead_phone || "",
+    outcome.preferred_phone || "",
     toYesNoIntention(outcome.interest_intent),
     outcome.timestamp_utc || toIsoTimestamp()
   ];

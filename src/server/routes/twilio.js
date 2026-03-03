@@ -81,6 +81,7 @@ function mergeCallOutcomeState(context, updates = {}) {
   callOutcomeState.set(context.call_sid, {
     lead_name: context.lead_name || existing.lead_name || "",
     lead_phone: context.lead_phone || existing.lead_phone || "",
+    preferred_phone: existing.preferred_phone || "",
     interest_intent: existing.interest_intent || "no",
     ...existing,
     ...updates
@@ -254,6 +255,10 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
         return respondTwiml(res, voiceResponse);
       }
 
+      mergeCallOutcomeState(context, {
+        interest_intent: "yes",
+        preferred_phone: parsedPhone.phoneNormalized || ""
+      });
       addSpeech(voiceResponse, CONTACT_SUCCESS_PROMPT, { config, promptAudioUrls });
       voiceResponse.hangup();
       return respondTwiml(res, voiceResponse);
@@ -287,6 +292,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
     await sheetsAdapter.appendCallOutcome({
       lead_name: context.lead_name || (savedState && savedState.lead_name) || "",
       lead_phone: context.lead_phone || (savedState && savedState.lead_phone) || "",
+      preferred_phone: (savedState && savedState.preferred_phone) || "",
       interest_intent: toTerminalIntention(savedState && savedState.interest_intent),
       timestamp_utc: new Date().toISOString()
     });
