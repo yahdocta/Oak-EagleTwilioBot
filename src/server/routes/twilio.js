@@ -335,6 +335,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       lead_phone: context.lead_phone || (savedState && savedState.lead_phone) || "",
       preferred_phone: (savedState && savedState.preferred_phone) || "",
       interest_intent: toTerminalIntention(savedState && savedState.interest_intent, context.call_status),
+      call_status: context.call_status || status,
       timestamp_utc: new Date().toISOString()
     });
     if (context.call_sid) {

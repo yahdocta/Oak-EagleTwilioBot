@@ -19,6 +19,7 @@ function toSheetRow(outcome) {
     outcome.lead_phone || "",
     outcome.preferred_phone || "",
     toIntentionCategory(outcome.interest_intent),
+    outcome.call_status || "",
     outcome.timestamp_utc || toIsoTimestamp()
   ];
 }
