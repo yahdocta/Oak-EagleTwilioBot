@@ -1,13 +1,33 @@
 const fs = require("fs");
 const { parse } = require("csv-parse/sync");
 
-const REQUIRED_COLUMNS = ["lead_id", "lead_name", "lead_phone"];
+const REQUIRED_COLUMNS = ["lead_id", "lead_phone"];
 
 function assertColumns(headers) {
   const missing = REQUIRED_COLUMNS.filter((column) => !headers.includes(column));
   if (missing.length > 0) {
     throw new Error(`CSV is missing required column(s): ${missing.join(", ")}`);
   }
+
+  const hasLeadName = headers.includes("lead_name");
+  const hasFirstName = headers.includes("first_name");
+  const hasLastName = headers.includes("last_name");
+  if (!hasLeadName && (!hasFirstName || !hasLastName)) {
+    throw new Error(
+      'CSV must include "lead_name" or both "first_name" and "last_name" columns.'
+    );
+  }
+}
+
+function buildLeadName(record) {
+  const leadName = String(record.lead_name || "").trim();
+  if (leadName.length > 0) {
+    return leadName;
+  }
+
+  const firstName = String(record.first_name || "").trim();
+  const lastName = String(record.last_name || "").trim();
+  return `${firstName} ${lastName}`.trim();
 }
 
 function parseLeadsCsv(csvPath) {
@@ -25,7 +45,7 @@ function parseLeadsCsv(csvPath) {
   assertColumns(Object.keys(records[0]));
   return records.map((record) => ({
     lead_id: String(record.lead_id || "").trim(),
-    lead_name: String(record.lead_name || "").trim(),
+    lead_name: buildLeadName(record),
     lead_phone: String(record.lead_phone || "").trim()
   }));
 }
