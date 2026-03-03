@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server/app.js",
     "dev": "nodemon src/server/app.js",
-    "check": "node -e \"require('./src/config').config; console.log('config-ok');\""
+    "check": "node -e \"require('./src/config').config; console.log('config-ok');\"",
+    "run-campaign": "node src/cli/runCampaign.js"
   },
   "engines": {
     "node": ">=20"

@@ -3,3 +3,5 @@
 node_modules/
 service-account.json
 *.log
+campaign-inputs/*
+!campaign-inputs/.gitkeep
