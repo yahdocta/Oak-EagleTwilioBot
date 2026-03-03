@@ -1,5 +1,6 @@
 const express = require("express");
 const { twiml } = require("twilio");
+const twilioClientFactory = require("twilio");
 const { config } = require("../../config");
 const { logger } = require("../../utils/logger");
 const { parseInterestIntent, parsePreferredPhone } = require("../../intent");
@@ -71,6 +72,7 @@ function addSpeech(voiceResponse, text, options) {
 const TERMINAL_CALL_STATUSES = new Set(["completed", "busy", "failed", "no-answer", "canceled"]);
 const callOutcomeState = new Map();
 const finalizedCallSids = new Set();
+const machineRedirectedCallSids = new Set();
 
 function mergeCallOutcomeState(context, updates = {}) {
   if (!context.call_sid) {
@@ -94,6 +96,7 @@ function toTerminalIntention(value) {
 
 function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
   const router = express.Router();
+  const twilioClient = twilioClientFactory(config.twilio.accountSid, config.twilio.authToken);
   const withErrorHandling =
     (handler) =>
     (req, res, next) =>
@@ -270,6 +273,33 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
     mergeCallOutcomeState(context);
 
     const status = String(context.call_status || "").toLowerCase();
+    if (
+      context.answer_type === "machine" &&
+      context.call_sid &&
+      !TERMINAL_CALL_STATUSES.has(status) &&
+      !machineRedirectedCallSids.has(context.call_sid)
+    ) {
+      try {
+        const voicemailResponse = new twiml.VoiceResponse();
+        addSpeech(voicemailResponse, config.twilio.voicemailText, { config, promptAudioUrls });
+        voicemailResponse.hangup();
+        await twilioClient.calls(context.call_sid).update({
+          twiml: voicemailResponse.toString()
+        });
+        machineRedirectedCallSids.add(context.call_sid);
+        mergeCallOutcomeState(context, { interest_intent: "no" });
+        logger.info("twilio.machine_redirected_to_voicemail", {
+          callSid: context.call_sid,
+          callStatus: context.call_status
+        });
+      } catch (error) {
+        logger.error("twilio.machine_redirect_failed", {
+          callSid: context.call_sid,
+          message: error.message
+        });
+      }
+    }
+
     if (!TERMINAL_CALL_STATUSES.has(status)) {
       logger.info("twilio.status.ignored_non_terminal", {
         callSid: context.call_sid,
@@ -298,6 +328,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
     });
     if (context.call_sid) {
       finalizedCallSids.add(context.call_sid);
+      machineRedirectedCallSids.delete(context.call_sid);
       callOutcomeState.delete(context.call_sid);
     }
     logger.info("twilio.status.received", {
