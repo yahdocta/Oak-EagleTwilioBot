@@ -85,6 +85,7 @@ function mergeCallOutcomeState(context, updates = {}) {
     lead_phone: context.lead_phone || existing.lead_phone || "",
     preferred_phone: existing.preferred_phone || "",
     interest_intent: existing.interest_intent || "no",
+    machine_detected: existing.machine_detected || false,
     ...existing,
     ...updates
   });
@@ -103,6 +104,13 @@ function toTerminalIntention(value, callStatus) {
     return "v/f";
   }
   return "no";
+}
+
+function toFinalCallStatus(callStatus, machineDetected) {
+  if (machineDetected) {
+    return "voicemail";
+  }
+  return String(callStatus || "").toLowerCase();
 }
 
 function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
@@ -139,7 +147,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       mergeCallOutcomeState(context);
 
       if (context.answer_type === "machine") {
-        mergeCallOutcomeState(context, { interest_intent: "v/f" });
+        mergeCallOutcomeState(context, { interest_intent: "v/f", machine_detected: true });
         addSpeech(voiceResponse, config.twilio.voicemailText, { config, promptAudioUrls });
         voiceResponse.hangup();
         return respondTwiml(res, voiceResponse);
@@ -281,7 +289,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
 
   async function statusHandler(req, res) {
     const context = collectCallContext(req);
-    mergeCallOutcomeState(context);
+    mergeCallOutcomeState(context, context.answer_type === "machine" ? { machine_detected: true } : {});
 
     const status = String(context.call_status || "").toLowerCase();
     if (
@@ -298,7 +306,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
           twiml: voicemailResponse.toString()
         });
         machineRedirectedCallSids.add(context.call_sid);
-        mergeCallOutcomeState(context, { interest_intent: "no" });
+        mergeCallOutcomeState(context, { interest_intent: "v/f", machine_detected: true });
         logger.info("twilio.machine_redirected_to_voicemail", {
           callSid: context.call_sid,
           callStatus: context.call_status
@@ -330,12 +338,13 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
     }
 
     const savedState = context.call_sid ? callOutcomeState.get(context.call_sid) : null;
+    const finalCallStatus = toFinalCallStatus(context.call_status || status, savedState && savedState.machine_detected);
     await sheetsAdapter.appendCallOutcome({
       lead_name: context.lead_name || (savedState && savedState.lead_name) || "",
       lead_phone: context.lead_phone || (savedState && savedState.lead_phone) || "",
       preferred_phone: (savedState && savedState.preferred_phone) || "",
       interest_intent: toTerminalIntention(savedState && savedState.interest_intent, context.call_status),
-      call_status: context.call_status || status,
+      call_status: finalCallStatus,
       timestamp_utc: new Date().toISOString()
     });
     if (context.call_sid) {
