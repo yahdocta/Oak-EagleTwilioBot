@@ -136,37 +136,90 @@ Phase 1 decision:
 - Store only necessary PII and protect credentials.
 - No automatic call retries for no-answer/busy outcomes.
 
-## 9. Implementation Plan (Parallel Agent Workstreams)
+## 9. Implementation Plan (Parallel Agent Blocks)
 
-### Track A - Telephony Core (Agent 1)
-- Implement Twilio webhook routes and TwiML flow states.
-- Add speech gather + retry logic.
-- Add AMD handling and voicemail branch.
-- Unit tests for flow transitions.
+### Block A - Telephony Core (Agent 1)
+- Scope:
+  - Implement Twilio webhook routes and TwiML flow states.
+  - Add speech gather + retry logic (`INTENT_MAX_RETRIES`).
+  - Add AMD handling and voicemail branch.
+- Files owned:
+  - `src/server/*` Twilio route/controller modules.
+- Input contracts:
+  - Uses parser interfaces from Block B.
+  - Uses sheet logging interface from Block C.
+- Output contracts:
+  - Stable route handlers:
+    - `POST /twilio/voice/outbound`
+    - `POST /twilio/voice/intent`
+    - `POST /twilio/voice/contact`
+    - `POST /twilio/voice/status`
 
-### Track B - Intent + Contact Parsing (Agent 2)
-- Implement yes/no classifier (rules-first baseline).
-- Implement preferred phone extraction and normalization.
-- Define confidence thresholds and fallback prompts.
-- Add parser test suite with realistic transcript fixtures.
+### Block B - Intent + Phone Parsing (Agent 2)
+- Scope:
+  - Implement yes/no classifier (rules-first baseline).
+  - Implement preferred phone extraction and normalization to E.164 where possible.
+  - Define confidence thresholds and fallback prompts.
+- Files owned:
+  - `src/intent/*` and parser tests.
+- Input contracts:
+  - Receives raw transcript + call context.
+- Output contracts:
+  - `parseInterestIntent(transcript) -> { intent, confidence }`
+  - `parsePreferredPhone(transcript) -> { phoneRaw, phoneNormalized, confidence }`
 
-### Track C - Google Sheets Integration (Agent 3)
-- Implement auth via `GOOGLE_SERVICE_ACCOUNT_JSON`.
-- Build append-row adapter and schema mapping.
-- Add retry/backoff and structured error logs.
-- Add integration test/mocked client tests.
+### Block C - Google Sheets Adapter (Agent 3)
+- Scope:
+  - Implement Sheets auth and append-row adapter.
+  - Map parsed call outcomes to sheet schema.
+  - Add retry/backoff and structured error logs.
+- Files owned:
+  - `src/integrations/sheets/*`.
+- Input contracts:
+  - Receives normalized event payload from Blocks A/B.
+- Output contracts:
+  - `appendCallOutcome(row)` async API with deterministic error handling.
 
-### Track D - Campaign Runner + Ops (Agent 4)
-- Build CSV lead input parser and outbound call launcher.
-- Add concurrency controls (`BATCH_MAX_CONCURRENCY`).
-- Add call lifecycle monitoring/logging.
-- Add dry-run mode and operational docs.
+### Block D - CSV Campaign Runner (Agent 4)
+- Scope:
+  - Build CSV lead parser and validation.
+  - Build outbound call launcher.
+  - Enforce concurrency (`BATCH_MAX_CONCURRENCY`).
+  - No automatic retry for no-answer/busy.
+- Files owned:
+  - `src/campaigns/*`.
+- Input contracts:
+  - CSV columns: `lead_id`, `lead_name`, `lead_phone`.
+- Output contracts:
+  - `startCampaign(csvPath, options)` that creates calls and emits run summary.
 
-### Track E - QA + Prompt/Voice Tuning (Agent 5)
-- Create test matrix for yes/no/ambiguous/voicemail scenarios.
-- Tune spoken prompts for clarity and conversion.
-- Compare 2-3 voice options and pick final default.
-- Validate call recordings and acceptance criteria.
+### Block E - Infra + Runtime (Agent 5)
+- Scope:
+  - Docker + Portainer runtime setup.
+  - Cloudflare Tunnel setup for stable HTTPS endpoint.
+  - Container auto-start/restart policies for app and tunnel.
+  - Ops runbook and recovery checklist.
+- Files owned:
+  - `docker-compose.yml`, `Dockerfile`, `docs/deployment.md`, optional `ops/*`.
+- Output contracts:
+  - Stable public base URL.
+  - Boot-persistent services for bot + tunnel via Docker restart policy.
+
+### Block F - QA + Voice Tuning (Agent 6)
+- Scope:
+  - Create test matrix for yes/no/ambiguous/voicemail scenarios.
+  - Tune prompts for conversion and clarity.
+  - Validate ElevenLabs voice quality with call recordings.
+- Files owned:
+  - `docs/test-plan.md`, fixtures under `tests/fixtures/*`.
+- Output contracts:
+  - Sign-off checklist tied to acceptance criteria.
+
+### Integration order
+1. Land Blocks B/C/D in parallel.
+2. Land Block A against finalized interfaces.
+3. Land Block E for hosted endpoint.
+4. Land Block F for end-to-end validation.
 
 ## 10. Milestones
 
@@ -217,8 +270,37 @@ Phase 1 decision:
 9. Primary pilot KPI
 - Interested rate.
 
-## 13. Remaining Open Item
+## 13. Deployment Target (Chosen)
 
-1. Deployment target
-- Pick where to host this app (for example Render, Railway, Fly.io, AWS, GCP, Azure, or local server/VPS).
-- This choice controls deployment steps, URL setup for Twilio webhooks, and operational setup.
+- Host on Ubuntu home server.
+- Run via Docker managed in Portainer.
+- Expose service via Cloudflare Tunnel for stable HTTPS URL.
+- Keep app and tunnel running via Docker restart policy (`unless-stopped`).
+
+### Required components
+1. Ubuntu server with Node.js 20+.
+2. Cloudflare-managed domain/subdomain (example: `calls.yourdomain.com`).
+3. `cloudflared` installed and authenticated.
+4. Docker Engine + Portainer.
+5. Twilio webhooks pointed at Cloudflare hostname.
+
+### Target URLs
+1. `PUBLIC_BASE_URL=https://calls.yourdomain.com`
+2. Voice webhook: `https://calls.yourdomain.com/twilio/voice/outbound`
+3. Status callback: `https://calls.yourdomain.com/twilio/status`
+
+### Runtime requirement
+- Primary runtime is Docker containers managed by Portainer:
+  - `bot` container for Node app.
+  - `cloudflared` container for tunnel.
+  - Both use restart policy for auto-recovery and reboot persistence.
+- `systemd` is optional only if you later choose host-level services instead of containers.
+
+### Deployment runbook (high-level)
+1. Build bot Docker image (`Dockerfile`) and define stack in `docker-compose.yml`.
+2. Create Cloudflare Tunnel + DNS route (`calls.yourdomain.com -> tunnel`).
+3. Add `cloudflared` service in same compose stack with ingress to bot container.
+4. Deploy stack through Portainer.
+5. Verify both containers are healthy and restart policies are active.
+6. Validate `/healthz` over public URL.
+7. Update Twilio webhook URLs.

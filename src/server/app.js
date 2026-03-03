@@ -1,6 +1,9 @@
 const express = require("express");
 const { config } = require("../config");
 const { logger } = require("../utils/logger");
+const { createTwilioRouter } = require("./routes/twilio");
+const { createCampaignRouter } = require("./routes/campaigns");
+const { sheetsAdapter } = require("./services");
 
 function requestLoggerMiddleware(req, res, next) {
   const startedAt = Date.now();
@@ -17,24 +20,12 @@ function requestLoggerMiddleware(req, res, next) {
   next();
 }
 
-function twilioPlaceholderHandler(routeName) {
-  return (req, res) => {
-    logger.warn("twilio.placeholder_route_called", {
-      route: routeName,
-      bodyKeys: Object.keys(req.body || {})
-    });
-
-    res.status(501).json({
-      error: `${routeName} is not implemented yet.`
-    });
-  };
+function mountTwilioRoutes(app) {
+  app.use("/twilio", createTwilioRouter({ sheetsAdapter }));
 }
 
-function mountTwilioRoutes(app) {
-  app.post("/twilio/voice", twilioPlaceholderHandler("voice"));
-  app.post("/twilio/gather/intent", twilioPlaceholderHandler("gather_intent"));
-  app.post("/twilio/gather/callback", twilioPlaceholderHandler("gather_callback"));
-  app.post("/twilio/status", twilioPlaceholderHandler("status"));
+function mountCampaignRoutes(app) {
+  app.use("/campaigns", createCampaignRouter());
 }
 
 function createApp() {
@@ -49,6 +40,21 @@ function createApp() {
   });
 
   mountTwilioRoutes(app);
+  mountCampaignRoutes(app);
+
+  app.use((error, req, res, next) => {
+    logger.error("request.failed", {
+      method: req.method,
+      path: req.originalUrl,
+      error: error.message
+    });
+
+    if (res.headersSent) {
+      return next(error);
+    }
+
+    return res.status(500).json({ error: "Internal Server Error" });
+  });
 
   return app;
 }
