@@ -96,6 +96,13 @@ function loadConfig(rawEnv = process.env) {
       voicemailText: rawEnv.TWILIO_VOICEMAIL_TEXT,
       voice: rawEnv.TWILIO_VOICE || null
     },
+    elevenLabs: {
+      apiKey: rawEnv.ELEVENLABS_API_KEY || null,
+      voiceId: rawEnv.ELEVENLABS_VOICE_ID || null,
+      modelId: rawEnv.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
+      outputFormat: rawEnv.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128",
+      cacheDir: rawEnv.ELEVENLABS_CACHE_DIR || ".cache/elevenlabs"
+    },
     urls: {
       publicBase: publicBaseUrl.toString(),
       statusCallback: statusCallbackUrl.toString()

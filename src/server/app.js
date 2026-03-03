@@ -3,7 +3,8 @@ const { config } = require("../config");
 const { logger } = require("../utils/logger");
 const { createTwilioRouter } = require("./routes/twilio");
 const { createCampaignRouter } = require("./routes/campaigns");
-const { sheetsAdapter } = require("./services");
+const { sheetsAdapter, elevenLabsTts } = require("./services");
+const { buildVoicePrompts } = require("./voicePrompts");
 
 function requestLoggerMiddleware(req, res, next) {
   const startedAt = Date.now();
@@ -20,15 +21,15 @@ function requestLoggerMiddleware(req, res, next) {
   next();
 }
 
-function mountTwilioRoutes(app) {
-  app.use("/twilio", createTwilioRouter({ sheetsAdapter }));
+function mountTwilioRoutes(app, promptAudioUrls) {
+  app.use("/twilio", createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }));
 }
 
 function mountCampaignRoutes(app) {
   app.use("/campaigns", createCampaignRouter());
 }
 
-function createApp() {
+function createApp(promptAudioUrls) {
   const app = express();
 
   app.use(express.json());
@@ -39,7 +40,7 @@ function createApp() {
     res.status(200).json({ ok: true });
   });
 
-  mountTwilioRoutes(app);
+  mountTwilioRoutes(app, promptAudioUrls);
   mountCampaignRoutes(app);
 
   app.use((error, req, res, next) => {
@@ -59,15 +60,40 @@ function createApp() {
   return app;
 }
 
+async function warmupVoicePrompts() {
+  if (!elevenLabsTts.enabled) {
+    return new Map();
+  }
+
+  const prompts = buildVoicePrompts(config);
+  const urls = await elevenLabsTts.preGeneratePrompts(prompts);
+  logger.info("voice.elevenlabs.pre_generated", { promptCount: urls.size });
+  return urls;
+}
+
 if (require.main === module) {
-  const app = createApp();
-  app.listen(config.server.port, () => {
-    logger.info("server.started", {
-      port: config.server.port
+  (async () => {
+    let promptAudioUrls = new Map();
+    try {
+      promptAudioUrls = await warmupVoicePrompts();
+    } catch (error) {
+      logger.error("voice.elevenlabs.pre_generate_failed", { error: error.message });
+      promptAudioUrls = new Map();
+    }
+
+    const app = createApp(promptAudioUrls);
+    app.listen(config.server.port, () => {
+      logger.info("server.started", {
+        port: config.server.port
+      });
     });
+  })().catch((error) => {
+    logger.error("server.start_failed", { error: error.message });
+    process.exit(1);
   });
 }
 
 module.exports = {
-  createApp
+  createApp,
+  warmupVoicePrompts
 };

@@ -3,6 +3,14 @@ const { twiml } = require("twilio");
 const { config } = require("../../config");
 const { logger } = require("../../utils/logger");
 const { parseInterestIntent, parsePreferredPhone } = require("../../intent");
+const {
+  OUTBOUND_INTRO_PROMPT,
+  CONTACT_REQUEST_PROMPT,
+  GOODBYE_PROMPT,
+  INTENT_RETRY_PROMPT,
+  CONTACT_RETRY_PROMPT,
+  CONTACT_SUCCESS_PROMPT
+} = require("../voicePrompts");
 
 function toAnswerType(answeredBy) {
   const value = String(answeredBy || "").toLowerCase();
@@ -48,12 +56,42 @@ function buildQuery(context, overrides = {}) {
   return params.toString();
 }
 
-function createTwilioRouter({ sheetsAdapter }) {
+function addSpeech(voiceResponse, text, options) {
+  const { gather, config, promptAudioUrls } = options;
+  const target = gather || voiceResponse;
+  const audioUrl = promptAudioUrls ? promptAudioUrls.get(text) : null;
+  if (audioUrl) {
+    target.play(audioUrl);
+    return;
+  }
+
+  target.say({ voice: config.twilio.voice || undefined }, text);
+}
+
+function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
   const router = express.Router();
   const withErrorHandling =
     (handler) =>
     (req, res, next) =>
       Promise.resolve(handler(req, res, next)).catch(next);
+
+  router.get(
+    "/voice/audio/:promptId.mp3",
+    withErrorHandling(async (req, res) => {
+      if (!elevenLabsTts || !elevenLabsTts.enabled) {
+        return res.status(404).json({ error: "ElevenLabs voice is not enabled." });
+      }
+
+      const audio = await elevenLabsTts.getAudioByKey(req.params.promptId);
+      if (!audio) {
+        return res.status(404).json({ error: "Unknown prompt." });
+      }
+
+      res.set("Content-Type", "audio/mpeg");
+      res.set("Cache-Control", "public, max-age=3600");
+      return res.status(200).send(audio);
+    })
+  );
 
   router.post(
     "/voice/outbound",
@@ -62,7 +100,7 @@ function createTwilioRouter({ sheetsAdapter }) {
     const voiceResponse = new twiml.VoiceResponse();
 
     if (context.answer_type === "machine") {
-      voiceResponse.say({ voice: config.twilio.voice || undefined }, config.twilio.voicemailText);
+      addSpeech(voiceResponse, config.twilio.voicemailText, { config, promptAudioUrls });
       voiceResponse.hangup();
       await sheetsAdapter.appendCallOutcome({
         ...context,
@@ -80,10 +118,11 @@ function createTwilioRouter({ sheetsAdapter }) {
       method: "POST",
       actionOnEmptyResult: true
     });
-    gather.say(
-      { voice: config.twilio.voice || undefined },
-      "Hi this is Kevin from Oak and Eagle, are you interested in selling your land?"
-    );
+    addSpeech(voiceResponse, OUTBOUND_INTRO_PROMPT, {
+      gather,
+      config,
+      promptAudioUrls
+    });
     voiceResponse.redirect(
       { method: "POST" },
       `/twilio/voice/intent?${buildQuery(context, { retry_count: 0 })}`
@@ -112,10 +151,11 @@ function createTwilioRouter({ sheetsAdapter }) {
         method: "POST",
         actionOnEmptyResult: true
       });
-      gather.say(
-        { voice: config.twilio.voice || undefined },
-        "Great, what is the best phone number to reach you?"
-      );
+      addSpeech(voiceResponse, CONTACT_REQUEST_PROMPT, {
+        gather,
+        config,
+        promptAudioUrls
+      });
       voiceResponse.redirect(
         { method: "POST" },
         `/twilio/voice/contact?${buildQuery(context, {
@@ -128,10 +168,7 @@ function createTwilioRouter({ sheetsAdapter }) {
     }
 
     if (parsed.intent === "no") {
-      voiceResponse.say(
-        { voice: config.twilio.voice || undefined },
-        "Thanks for your time. Have a great day."
-      );
+      addSpeech(voiceResponse, GOODBYE_PROMPT, { config, promptAudioUrls });
       voiceResponse.hangup();
       await sheetsAdapter.appendCallOutcome({
         ...context,
@@ -151,9 +188,10 @@ function createTwilioRouter({ sheetsAdapter }) {
         method: "POST",
         actionOnEmptyResult: true
       });
-      gather.say(
-        { voice: config.twilio.voice || undefined },
-        "Sorry, I did not catch that. Are you interested in selling your land, yes or no?"
+      addSpeech(
+        voiceResponse,
+        INTENT_RETRY_PROMPT,
+        { gather, config, promptAudioUrls }
       );
       voiceResponse.redirect(
         { method: "POST" },
@@ -162,10 +200,7 @@ function createTwilioRouter({ sheetsAdapter }) {
       return respondTwiml(res, voiceResponse);
     }
 
-    voiceResponse.say(
-      { voice: config.twilio.voice || undefined },
-      "Thanks for your time. Have a great day."
-    );
+    addSpeech(voiceResponse, GOODBYE_PROMPT, { config, promptAudioUrls });
     voiceResponse.hangup();
     await sheetsAdapter.appendCallOutcome({
       ...context,
@@ -194,9 +229,10 @@ function createTwilioRouter({ sheetsAdapter }) {
         method: "POST",
         actionOnEmptyResult: true
       });
-      gather.say(
-        { voice: config.twilio.voice || undefined },
-        "I could not capture the number clearly. Please say the best phone number to reach you."
+      addSpeech(
+        voiceResponse,
+        CONTACT_RETRY_PROMPT,
+        { gather, config, promptAudioUrls }
       );
       voiceResponse.redirect(
         { method: "POST" },
@@ -205,10 +241,7 @@ function createTwilioRouter({ sheetsAdapter }) {
       return respondTwiml(res, voiceResponse);
     }
 
-    voiceResponse.say(
-      { voice: config.twilio.voice || undefined },
-      "Thank you, we will be in touch soon."
-    );
+    addSpeech(voiceResponse, CONTACT_SUCCESS_PROMPT, { config, promptAudioUrls });
     voiceResponse.hangup();
 
     await sheetsAdapter.appendCallOutcome({
