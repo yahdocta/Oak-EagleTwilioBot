@@ -1,5 +1,6 @@
 const twilio = require("twilio");
-const pLimit = require("p-limit");
+const pLimitImport = require("p-limit");
+const pLimit = pLimitImport.default || pLimitImport;
 const { parseLeadsCsv } = require("./csvLeads");
 const { logger } = require("../utils/logger");
 
