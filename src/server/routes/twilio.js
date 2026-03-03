@@ -72,6 +72,7 @@ function createTwilioRouter({ sheetsAdapter }) {
       return respondTwiml(res, voiceResponse);
     }
 
+    voiceResponse.pause({ length: 1 });
     const gather = voiceResponse.gather({
       input: "speech",
       speechTimeout: "auto",

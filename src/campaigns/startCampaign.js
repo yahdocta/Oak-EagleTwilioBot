@@ -8,6 +8,16 @@ function createTwilioClient(config) {
   return twilio(config.twilio.accountSid, config.twilio.authToken);
 }
 
+function buildCallbackUrl(baseUrl, pathname, query) {
+  const url = new URL(pathname, baseUrl);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).length > 0) {
+      url.searchParams.append(key, String(value));
+    }
+  });
+  return url.toString();
+}
+
 async function startCampaign(csvPath, options) {
   const { config, campaignId, twilioClient = createTwilioClient(config) } = options;
   const limit = pLimit(config.batch.maxConcurrency);
@@ -17,17 +27,26 @@ async function startCampaign(csvPath, options) {
     leads.map((lead) =>
       limit(async () => {
         try {
+          const callbackQuery = {
+            lead_id: lead.lead_id,
+            lead_name: lead.lead_name,
+            lead_phone: lead.lead_phone,
+            campaign_id: campaignId || ""
+          };
           const call = await twilioClient.calls.create({
             to: lead.lead_phone,
             from: config.twilio.fromNumber,
             machineDetection: config.twilio.amdMode,
-            url: `${config.urls.publicBase}twilio/voice/outbound?lead_id=${encodeURIComponent(
-              lead.lead_id
-            )}&lead_name=${encodeURIComponent(lead.lead_name)}&lead_phone=${encodeURIComponent(
-              lead.lead_phone
-            )}&campaign_id=${encodeURIComponent(campaignId || "")}`,
+            asyncAmd: true,
+            url: buildCallbackUrl(config.urls.publicBase, "/twilio/voice/outbound", callbackQuery),
             statusCallback: config.urls.statusCallback,
-            statusCallbackMethod: "POST"
+            statusCallbackMethod: "POST",
+            asyncAmdStatusCallback: buildCallbackUrl(
+              config.urls.publicBase,
+              "/twilio/voice/status",
+              callbackQuery
+            ),
+            asyncAmdStatusCallbackMethod: "POST"
           });
 
           return { ok: true, lead, callSid: call.sid };
