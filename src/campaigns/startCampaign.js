@@ -18,6 +18,16 @@ function buildCallbackUrl(baseUrl, pathname, query) {
   return url.toString();
 }
 
+function appendQueryToUrl(urlString, query) {
+  const url = new URL(urlString);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).length > 0) {
+      url.searchParams.append(key, String(value));
+    }
+  });
+  return url.toString();
+}
+
 async function startCampaign(csvPath, options) {
   const { config, campaignId, twilioClient = createTwilioClient(config) } = options;
   const limit = pLimit(config.batch.maxConcurrency);
@@ -39,7 +49,7 @@ async function startCampaign(csvPath, options) {
             machineDetection: config.twilio.amdMode,
             asyncAmd: true,
             url: buildCallbackUrl(config.urls.publicBase, "/twilio/voice/outbound", callbackQuery),
-            statusCallback: config.urls.statusCallback,
+            statusCallback: appendQueryToUrl(config.urls.statusCallback, callbackQuery),
             statusCallbackMethod: "POST",
             asyncAmdStatusCallback: buildCallbackUrl(
               config.urls.publicBase,

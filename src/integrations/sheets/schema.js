@@ -2,24 +2,21 @@ function toIsoTimestamp(value = new Date()) {
   return value.toISOString();
 }
 
+function toYesNoIntention(value) {
+  return String(value || "").toLowerCase() === "yes" ? "yes" : "no";
+}
+
 function toSheetRow(outcome) {
   return [
-    outcome.timestamp_utc || toIsoTimestamp(),
-    outcome.lead_id || "",
     outcome.lead_name || "",
     outcome.lead_phone || "",
-    outcome.call_sid || "",
-    outcome.call_status || "",
-    outcome.answer_type || "unknown",
-    outcome.interest_intent || "unknown",
-    outcome.preferred_phone || "",
-    String(outcome.intent_confidence ?? ""),
-    String(outcome.retry_count ?? 0),
-    outcome.notes || ""
+    toYesNoIntention(outcome.interest_intent),
+    outcome.timestamp_utc || toIsoTimestamp()
   ];
 }
 
 module.exports = {
   toSheetRow,
-  toIsoTimestamp
+  toIsoTimestamp,
+  toYesNoIntention
 };
