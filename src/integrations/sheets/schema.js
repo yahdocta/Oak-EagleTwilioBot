@@ -2,8 +2,15 @@ function toIsoTimestamp(value = new Date()) {
   return value.toISOString();
 }
 
-function toYesNoIntention(value) {
-  return String(value || "").toLowerCase() === "yes" ? "yes" : "no";
+function toIntentionCategory(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "yes") {
+    return "yes";
+  }
+  if (normalized === "v/f") {
+    return "v/f";
+  }
+  return "no";
 }
 
 function toSheetRow(outcome) {
@@ -11,7 +18,7 @@ function toSheetRow(outcome) {
     outcome.lead_name || "",
     outcome.lead_phone || "",
     outcome.preferred_phone || "",
-    toYesNoIntention(outcome.interest_intent),
+    toIntentionCategory(outcome.interest_intent),
     outcome.timestamp_utc || toIsoTimestamp()
   ];
 }
@@ -19,5 +26,5 @@ function toSheetRow(outcome) {
 module.exports = {
   toSheetRow,
   toIsoTimestamp,
-  toYesNoIntention
+  toIntentionCategory
 };

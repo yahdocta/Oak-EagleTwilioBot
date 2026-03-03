@@ -90,8 +90,19 @@ function mergeCallOutcomeState(context, updates = {}) {
   });
 }
 
-function toTerminalIntention(value) {
-  return String(value || "").toLowerCase() === "yes" ? "yes" : "no";
+function toTerminalIntention(value, callStatus) {
+  if (String(callStatus || "").toLowerCase() === "failed") {
+    return "v/f";
+  }
+
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "yes") {
+    return "yes";
+  }
+  if (normalized === "v/f") {
+    return "v/f";
+  }
+  return "no";
 }
 
 function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
@@ -128,7 +139,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       mergeCallOutcomeState(context);
 
       if (context.answer_type === "machine") {
-        mergeCallOutcomeState(context, { interest_intent: "no" });
+        mergeCallOutcomeState(context, { interest_intent: "v/f" });
         addSpeech(voiceResponse, config.twilio.voicemailText, { config, promptAudioUrls });
         voiceResponse.hangup();
         return respondTwiml(res, voiceResponse);
@@ -323,7 +334,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       lead_name: context.lead_name || (savedState && savedState.lead_name) || "",
       lead_phone: context.lead_phone || (savedState && savedState.lead_phone) || "",
       preferred_phone: (savedState && savedState.preferred_phone) || "",
-      interest_intent: toTerminalIntention(savedState && savedState.interest_intent),
+      interest_intent: toTerminalIntention(savedState && savedState.interest_intent, context.call_status),
       timestamp_utc: new Date().toISOString()
     });
     if (context.call_sid) {
