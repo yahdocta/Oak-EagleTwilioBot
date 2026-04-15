@@ -4,6 +4,7 @@ const multer = require("multer");
 const path = require("path");
 const { config } = require("../../config");
 const { startCampaign } = require("../../campaigns");
+const { convertDealMachineCsvFile } = require("../../campaigns/dealMachineCsv");
 const { CampaignManager } = require("../campaignManager");
 
 const uploadDir = path.resolve("campaign-inputs", "uploads");
@@ -45,6 +46,10 @@ function createCsvUploader() {
   });
 }
 
+function isChecked(value) {
+  return value === true || value === "true" || value === "on" || value === "1";
+}
+
 function createCampaignRouter(options = {}) {
   const router = express.Router();
   const manager = options.manager || new CampaignManager({ config });
@@ -66,6 +71,10 @@ function createCampaignRouter(options = {}) {
         return res.status(400).json({ error: "CSV upload is required." });
       }
 
+      if (isChecked(req.body.dealMachineCsv)) {
+        convertDealMachineCsvFile(req.file.path);
+      }
+
       const state = manager.setUploadedCsv(req.file.path);
       return res.status(200).json(state);
     })
@@ -76,7 +85,9 @@ function createCampaignRouter(options = {}) {
     withErrorHandling(async (req, res) => {
       const state = manager.start(req.body.campaignId, {
         loopEnabled: req.body.loopEnabled,
-        loopIntervalHours: req.body.loopIntervalHours
+        loopIntervalHours: req.body.loopIntervalHours,
+        scheduleStartAt: req.body.scheduleStartAt,
+        scheduleTimezone: req.body.scheduleTimezone
       });
       return res.status(202).json(state);
     })
@@ -86,6 +97,14 @@ function createCampaignRouter(options = {}) {
     "/ui/end",
     withErrorHandling(async (req, res) => {
       const state = await manager.stop();
+      return res.status(202).json(state);
+    })
+  );
+
+  router.post(
+    "/ui/pause",
+    withErrorHandling(async (req, res) => {
+      const state = manager.togglePause();
       return res.status(202).json(state);
     })
   );
@@ -116,9 +135,16 @@ function createCampaignRouter(options = {}) {
 
     if (
       error.message === "A campaign is already running." ||
+      error.message === "A campaign is already scheduled." ||
       error.message === "Upload a CSV before starting a campaign." ||
       error.message === "No campaign is currently running." ||
-      error.message === "Loop interval must be a positive number of hours."
+      error.message === "Loop interval must be a positive number of hours." ||
+      error.message === "Schedule time zone is required." ||
+      error.message === "Schedule time zone must be a valid IANA time zone." ||
+      error.message === "Schedule time must be in the future." ||
+      error.message === "Schedule time must use YYYY-MM-DDTHH:mm format." ||
+      error.message === "Schedule time must be a valid calendar date and time." ||
+      error.message === "Schedule time is not valid in the selected time zone."
     ) {
       return res.status(409).json({ error: error.message });
     }

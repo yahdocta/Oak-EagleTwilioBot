@@ -3,11 +3,13 @@ const systemStatusUrl = "/system/status";
 const uploadUrl = "/campaigns/ui/upload";
 const startUrl = "/campaigns/ui/start";
 const endUrl = "/campaigns/ui/end";
+const pauseUrl = "/campaigns/ui/pause";
 
 const elements = {
   uploadForm: document.querySelector("#uploadForm"),
   controlForm: document.querySelector("#controlForm"),
   csvInput: document.querySelector("#csvInput"),
+  dealMachineCsv: document.querySelector("#dealMachineCsv"),
   fileName: document.querySelector("#fileName"),
   uploadedFile: document.querySelector("#uploadedFile"),
   statusValue: document.querySelector("#statusValue"),
@@ -19,7 +21,11 @@ const elements = {
   campaignInput: document.querySelector("#campaignInput"),
   loopEnabled: document.querySelector("#loopEnabled"),
   loopIntervalHours: document.querySelector("#loopIntervalHours"),
+  scheduleEnabled: document.querySelector("#scheduleEnabled"),
+  scheduleStartAt: document.querySelector("#scheduleStartAt"),
+  scheduleTimezone: document.querySelector("#scheduleTimezone"),
   startButton: document.querySelector("#startButton"),
+  pauseButton: document.querySelector("#pauseButton"),
   endButton: document.querySelector("#endButton"),
   refreshButton: document.querySelector("#refreshButton"),
   summaryText: document.querySelector("#summaryText"),
@@ -58,6 +64,14 @@ function formatTime(timestamp) {
   }).format(new Date(timestamp));
 }
 
+function formatDateTime(timestamp, timeZone) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone
+  }).format(new Date(timestamp));
+}
+
 function summarizeMeta(meta) {
   if (!meta || Object.keys(meta).length === 0) {
     return "";
@@ -78,6 +92,15 @@ async function readJson(response) {
 }
 
 function renderSummary(state) {
+  if (state.status === "scheduled" && state.scheduledStartAt) {
+    const timezone = state.scheduledTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    elements.summaryText.textContent = `Scheduled for ${formatDateTime(
+      state.scheduledStartAt,
+      timezone
+    )} ${timezone}.`;
+    return;
+  }
+
   if (!state.summary) {
     if (state.uploadedCsv) {
       elements.summaryText.textContent = "Ready to start.";
@@ -158,7 +181,7 @@ function renderRecurringCalls(leads) {
     elements.recurringSummary.textContent = "No leads uploaded.";
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 7;
+    cell.colSpan = 8;
     cell.className = "empty-cell";
     cell.textContent = "Upload a CSV to see the recurring call list.";
     row.appendChild(cell);
@@ -183,6 +206,9 @@ function renderRecurringCalls(leads) {
     const phoneCell = document.createElement("td");
     phoneCell.textContent = lead.leadPhone || "No phone";
 
+    const addressCell = document.createElement("td");
+    addressCell.textContent = lead.leadAddress || "No address";
+
     const statusCell = document.createElement("td");
     const statusBadge = document.createElement("span");
     statusBadge.className = `status-badge ${lead.status || "ready"}`;
@@ -205,6 +231,7 @@ function renderRecurringCalls(leads) {
     row.append(
       leadCell,
       phoneCell,
+      addressCell,
       statusCell,
       callStatusCell,
       intentCell,
@@ -216,12 +243,16 @@ function renderRecurringCalls(leads) {
 }
 
 function renderState(state) {
-  const isBusy = state.status === "running" || state.status === "stopping";
+  const isRunning = state.status === "running";
+  const isScheduled = state.status === "scheduled";
+  const isBusy = isRunning || state.status === "stopping" || isScheduled;
   elements.statusValue.textContent = formatStatus(state.status);
   elements.leadCount.textContent = state.uploadedLeadCount || 0;
   elements.activeCalls.textContent = state.activeCallCount || 0;
   elements.campaignId.textContent = state.campaignId || "None";
   elements.startButton.disabled = isBusy || !state.uploadedCsv;
+  elements.pauseButton.disabled = !isRunning;
+  elements.pauseButton.textContent = state.isPaused ? "Resume Campaign" : "Pause Campaign";
   elements.endButton.disabled = !isBusy;
   elements.uploadedFile.textContent = state.uploadedCsv
     ? `Uploaded: ${state.uploadedCsv.name}`
@@ -277,6 +308,10 @@ elements.csvInput.addEventListener("change", () => {
   elements.fileName.textContent = elements.csvInput.files[0]?.name || "Choose a CSV file";
 });
 
+elements.scheduleEnabled.addEventListener("change", () => {
+  elements.scheduleStartAt.required = elements.scheduleEnabled.checked;
+});
+
 elements.uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const file = elements.csvInput.files[0];
@@ -287,6 +322,9 @@ elements.uploadForm.addEventListener("submit", async (event) => {
 
   const formData = new FormData();
   formData.append("csv", file);
+  if (elements.dealMachineCsv.checked) {
+    formData.append("dealMachineCsv", "true");
+  }
 
   try {
     elements.uploadForm.querySelector("button").disabled = true;
@@ -309,11 +347,14 @@ elements.controlForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         campaignId: elements.campaignInput.value.trim(),
         loopEnabled: elements.loopEnabled.checked,
-        loopIntervalHours: elements.loopIntervalHours.value
+        loopIntervalHours: elements.loopIntervalHours.value,
+        scheduleStartAt: elements.scheduleEnabled.checked ? elements.scheduleStartAt.value : "",
+        scheduleTimezone: elements.scheduleEnabled.checked ? elements.scheduleTimezone.value : ""
       })
     });
-    renderState(await readJson(response));
-    showToast("Campaign started.");
+    const state = await readJson(response);
+    renderState(state);
+    showToast(state.status === "scheduled" ? "Campaign scheduled." : "Campaign started.");
   } catch (error) {
     showToast(error.message);
   }
@@ -329,9 +370,29 @@ elements.endButton.addEventListener("click", async () => {
   }
 });
 
+elements.pauseButton.addEventListener("click", async () => {
+  try {
+    const response = await fetch(pauseUrl, { method: "POST" });
+    const state = await readJson(response);
+    renderState(state);
+    showToast(state.isPaused ? "Campaign paused." : "Campaign resumed.");
+  } catch (error) {
+    showToast(error.message);
+  }
+});
+
 elements.refreshButton.addEventListener("click", () => {
   refreshDashboard().catch((error) => showToast(error.message));
 });
+
+const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+if (
+  browserTimezone &&
+  Array.from(elements.scheduleTimezone.options).some((option) => option.value === browserTimezone)
+) {
+  elements.scheduleTimezone.value = browserTimezone;
+}
+elements.scheduleStartAt.required = elements.scheduleEnabled.checked;
 
 refreshDashboard().catch((error) => showToast(error.message));
 setInterval(() => {

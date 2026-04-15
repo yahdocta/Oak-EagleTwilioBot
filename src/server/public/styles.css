@@ -27,7 +27,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
   letter-spacing: 0;
 }
@@ -230,7 +231,9 @@ label {
 }
 
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+input[type="datetime-local"],
+select {
   width: 100%;
   min-height: 48px;
   margin-bottom: 16px;
@@ -243,6 +246,8 @@ input[type="number"] {
 
 input[type="text"]:focus,
 input[type="number"]:focus,
+input[type="datetime-local"]:focus,
+select:focus,
 .file-picker:focus-within {
   outline: 3px solid rgba(31, 122, 90, 0.22);
   border-color: var(--green);
@@ -361,7 +366,8 @@ input[type="number"]:focus,
 
 .status-badge.waiting_next_loop,
 .status-badge.retrying,
-.status-badge.pending {
+.status-badge.pending,
+.status-badge.scheduled {
   border-color: #dec879;
   background: #fff8db;
   color: #6f5309;

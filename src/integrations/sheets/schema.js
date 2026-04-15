@@ -17,6 +17,7 @@ function toSheetRow(outcome) {
   return [
     outcome.lead_name || "",
     outcome.lead_phone || "",
+    outcome.lead_address || "",
     outcome.preferred_phone || "",
     toIntentionCategory(outcome.interest_intent),
     outcome.call_status || "",

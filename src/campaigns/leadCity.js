@@ -50,7 +50,20 @@ function getLeadCity(record) {
   return "";
 }
 
+function getLeadCityFromAddress(address) {
+  const parts = String(address || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) {
+    return "";
+  }
+
+  return normalizeLeadCity(parts[1]);
+}
+
 module.exports = {
+  getLeadCityFromAddress,
   getLeadCity,
   normalizeLeadCity
 };

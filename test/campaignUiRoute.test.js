@@ -50,6 +50,8 @@ function makeManager(overrides = {}) {
     activeCallCount: 0,
     pendingLeadCount: 0,
     stopRequested: false,
+    scheduledStartAt: null,
+    scheduledTimezone: null,
     summary: null,
     recurringCallList: [],
     activity: []
@@ -75,6 +77,11 @@ function makeManager(overrides = {}) {
       calls.push({ method: "stop" });
       state.status = "stopping";
       state.stopRequested = true;
+      return state;
+    },
+    togglePause: () => {
+      calls.push({ method: "togglePause" });
+      state.isPaused = !state.isPaused;
       return state;
     },
     ...overrides
@@ -114,6 +121,7 @@ test("campaign UI state route returns recurring call list", async (t) => {
           leadId: "lead-1",
           leadName: "Ada Lovelace",
           leadPhone: "+15550000001",
+          leadAddress: "123 Oak St",
           status: "active",
           lastCallStatus: "",
           lastIntent: "",
@@ -147,6 +155,7 @@ test("campaign UI state route returns recurring call list", async (t) => {
   assert.equal(response.status, 200);
   assert.equal(payload.recurringCallList.length, 2);
   assert.equal(payload.recurringCallList[0].status, "active");
+  assert.equal(payload.recurringCallList[0].leadAddress, "123 Oak St");
   assert.equal(payload.recurringCallList[0].callSid, "CA-active");
   assert.equal(payload.recurringCallList[1].status, "waiting_next_loop");
   assert.equal(payload.recurringCallList[1].lastCallStatus, "no-answer");
@@ -174,6 +183,43 @@ test("campaign UI upload accepts CSV files and passes saved path to manager", as
   assert.equal(manager.calls[0].method, "setUploadedCsv");
   assert.equal(manager.calls[0].exists, true);
   assert.match(path.basename(manager.calls[0].csvPath), /^\d+-leads\.csv$/);
+});
+
+test("campaign UI upload converts DealMachine CSVs when requested", async (t) => {
+  const manager = makeManager();
+  const baseUrl = await withServer(t, manager);
+  const formData = new FormData();
+  formData.append("dealMachineCsv", "true");
+  formData.append(
+    "csv",
+    new Blob(
+      [
+        "contact_id,associated_property_address_full,first_name,last_name,phone_1,phone_2,phone_3\n",
+        '150186385122,"Eliot Ln, Albrightsville, Pa 18210",Mark,Migliaccio,Wireless Excluded,8565474260,8565475464\n'
+      ],
+      { type: "text/csv" }
+    ),
+    "dealmachine-contacts.csv"
+  );
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/upload`, {
+    method: "POST",
+    body: formData
+  });
+  const payload = await readJson(response);
+  const savedCsv = fs.readFileSync(manager.calls[0].csvPath, "utf8");
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.uploadedLeadCount, 1);
+  assert.match(path.basename(manager.calls[0].csvPath), /^\d+-dealmachine-contacts\.csv$/);
+  assert.equal(
+    savedCsv,
+    [
+      "lead_id,first_name,last_name,lead_phone,lead_address,lead_city",
+      '150186385122,Mark,Migliaccio,+18565474260,"Eliot Ln, Albrightsville, Pa 18210",Albrightsville',
+      ""
+    ].join("\n")
+  );
 });
 
 test("campaign UI upload rejects non-CSV files", async (t) => {
@@ -209,7 +255,9 @@ test("campaign UI start and end routes call manager controls", async (t) => {
   assert.equal(manager.calls.at(-1).campaignId, "spring-test");
   assert.deepEqual(manager.calls.at(-1).options, {
     loopEnabled: true,
-    loopIntervalHours: 6
+    loopIntervalHours: 6,
+    scheduleStartAt: undefined,
+    scheduleTimezone: undefined
   });
 
   const endResponse = await fetch(`${baseUrl}/campaigns/ui/end`, { method: "POST" });
@@ -218,4 +266,51 @@ test("campaign UI start and end routes call manager controls", async (t) => {
   assert.equal(endResponse.status, 202);
   assert.equal(endPayload.status, "stopping");
   assert.equal(manager.calls.at(-1).method, "stop");
+});
+
+test("campaign UI start route forwards schedule fields to manager", async (t) => {
+  const manager = makeManager();
+  const baseUrl = await withServer(t, manager);
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      campaignId: "scheduled-route",
+      loopEnabled: false,
+      loopIntervalHours: 24,
+      scheduleStartAt: "2026-04-16T09:15",
+      scheduleTimezone: "America/Chicago"
+    })
+  });
+  const payload = await readJson(response);
+
+  assert.equal(response.status, 202);
+  assert.equal(payload.status, "running");
+  assert.equal(manager.calls.at(-1).method, "start");
+  assert.deepEqual(manager.calls.at(-1).options, {
+    loopEnabled: false,
+    loopIntervalHours: 24,
+    scheduleStartAt: "2026-04-16T09:15",
+    scheduleTimezone: "America/Chicago"
+  });
+});
+
+test("campaign UI pause route toggles manager pause state", async (t) => {
+  const manager = makeManager();
+  const baseUrl = await withServer(t, manager);
+
+  const pauseResponse = await fetch(`${baseUrl}/campaigns/ui/pause`, { method: "POST" });
+  const pausePayload = await readJson(pauseResponse);
+
+  assert.equal(pauseResponse.status, 202);
+  assert.equal(pausePayload.isPaused, true);
+  assert.equal(manager.calls.at(-1).method, "togglePause");
+
+  const resumeResponse = await fetch(`${baseUrl}/campaigns/ui/pause`, { method: "POST" });
+  const resumePayload = await readJson(resumeResponse);
+
+  assert.equal(resumeResponse.status, 202);
+  assert.equal(resumePayload.isPaused, false);
+  assert.equal(manager.calls.at(-1).method, "togglePause");
 });

@@ -16,6 +16,10 @@ function makeCityCsv() {
   return "lead_id,lead_name,lead_phone,city\nlead-1,Lead 1,+15550000001,Asheville\n";
 }
 
+function makeAddressCsv() {
+  return "lead_id,lead_name,lead_phone,address\nlead-1,Lead 1,+15550000001,123 Oak St\n";
+}
+
 test("startCampaign creates outbound calls from a fake CSV", async () => {
   const dir = makeTempDir();
   const csvPath = writeTempFile(dir, "campaign.csv", makeCsv(2));
@@ -72,6 +76,30 @@ test("startCampaign passes lead city through callback URLs when present", async 
   assert.match(createdCalls[0].url, /lead_city=Asheville/);
   assert.match(createdCalls[0].statusCallback, /lead_city=Asheville/);
   assert.match(createdCalls[0].asyncAmdStatusCallback, /lead_city=Asheville/);
+});
+
+test("startCampaign passes lead address through callback URLs when present", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign-address.csv", makeAddressCsv());
+  const createdCalls = [];
+  const twilioClient = {
+    calls: {
+      create: async (payload) => {
+        createdCalls.push(payload);
+        return { sid: "CA-address" };
+      }
+    }
+  };
+
+  await startCampaign(csvPath, {
+    config: buildTestConfig(),
+    campaignId: "address-test",
+    twilioClient
+  });
+
+  assert.match(createdCalls[0].url, /lead_address=123\+Oak\+St/);
+  assert.match(createdCalls[0].statusCallback, /lead_address=123\+Oak\+St/);
+  assert.match(createdCalls[0].asyncAmdStatusCallback, /lead_address=123\+Oak\+St/);
 });
 
 test("startCampaign reports individual call failures without aborting the campaign", async () => {

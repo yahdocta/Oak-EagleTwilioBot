@@ -189,12 +189,12 @@ In Twilio Console for your phone number (Voice webhook):
 1. Start app.
 2. Confirm startup logs include `cloudflared.starting`.
 3. Open `https://calls.yourdomain.com/`.
-4. Upload a tiny CSV with 1-2 leads. Add an optional `city` or `lead_city` column if you want the opening question to include the city.
+4. Upload a tiny CSV with 1-2 leads. Add an optional `city` or `lead_city` column if you want the opening question to include the city. Add an optional `address` or `lead_address` column if you want the address logged. For a DealMachine export, check `Deal Machine CSV` before uploading so the app converts `contact_id`, `associated_property_address_full`, and `phone_1`/`phone_2`/`phone_3` into the campaign format and derives `lead_city` where possible.
 5. Start the campaign from the page.
 6. Watch the Activity section.
 7. Confirm the Cloudflare Tunnel metric says `Running`.
 8. Confirm confirmed interested leads are appended to your Google Sheet after calls finish. Declines, no-answer, voicemail, and unresolved calls update the campaign console but do not create Sheet rows.
-9. Confirm the Google Sheet has a column `G` header such as `call_transcript`; the app writes the captured call transcript there for interested leads.
+9. Confirm the Google Sheet has a column `H` header such as `call_transcript`; the app writes the captured call transcript there for interested leads.
 
 ## 8. Troubleshooting quick list
 
@@ -219,7 +219,7 @@ Current status:
 - Cloudflare Tunnel auto-start implemented through npm start when CLOUDFLARED_AUTO_START=true
 - Cloudflare Tunnel status is exposed at GET /system/status and shown in the web console
 - Intent parsing + phone extraction + interested-lead Sheets adapter implemented
-- Google Sheets appends confirmed interested leads only, with call transcript in column G
+- Google Sheets appends confirmed interested leads only, with call transcript in column H
 - service-account.json exists locally
 
 Need help with:

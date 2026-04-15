@@ -17,10 +17,20 @@ function toPublicFile(filePath) {
 }
 
 class CampaignManager {
-  constructor({ config, twilioClientFactory = createTwilioClient, sleep = null }) {
+  constructor({
+    config,
+    twilioClientFactory = createTwilioClient,
+    sleep = null,
+    now = () => new Date(),
+    setTimer = setTimeout,
+    clearTimer = clearTimeout
+  }) {
     this.config = config;
     this.twilioClientFactory = twilioClientFactory;
     this.sleep = sleep;
+    this.now = now;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
     this.status = "idle";
     this.currentCampaignId = null;
     this.uploadedCsvPath = null;
@@ -32,6 +42,8 @@ class CampaignManager {
     this.activity = [];
     this.summary = null;
     this.stopRequested = false;
+    this.isPaused = false;
+    this.pauseResolve = null;
     this.twilioClient = null;
     this.runPromise = null;
     this.loopEnabled = false;
@@ -42,6 +54,11 @@ class CampaignManager {
     this.removedNotInterestedCount = 0;
     this.intervalTimer = null;
     this.intervalResolve = null;
+    this.scheduleTimer = null;
+    this.scheduledStartAt = null;
+    this.scheduledTimezone = null;
+    this.scheduledCampaignId = null;
+    this.scheduledOptions = null;
   }
 
   log(level, message, meta = {}) {
@@ -89,10 +106,107 @@ class CampaignManager {
       throw new Error("A campaign is already running.");
     }
 
+    if (this.status === "scheduled") {
+      throw new Error("A campaign is already scheduled.");
+    }
+
     if (!this.uploadedCsvPath) {
       throw new Error("Upload a CSV before starting a campaign.");
     }
 
+    const loopEnabled = Boolean(options.loopEnabled);
+    const loopIntervalHours = normalizeLoopIntervalHours(options.loopIntervalHours);
+    const schedule = normalizeSchedule(options.scheduleStartAt, options.scheduleTimezone, this.now());
+
+    if (schedule) {
+      return this.schedule(campaignId, {
+        loopEnabled,
+        loopIntervalHours,
+        scheduledStartAt: schedule.startAt,
+        scheduledTimezone: schedule.timezone
+      });
+    }
+
+    return this.startNow(campaignId, { loopEnabled, loopIntervalHours });
+  }
+
+  schedule(campaignId = makeCampaignId(), options) {
+    this.clearScheduledTimer();
+
+    this.status = "scheduled";
+    this.currentCampaignId = campaignId || makeCampaignId();
+    this.summary = null;
+    this.stopRequested = false;
+    this.isPaused = false;
+    this.clearPauseWait();
+    this.activeCalls.clear();
+    this.pendingLeadIds = new Set(this.uploadedLeads.map((lead) => lead.lead_id));
+    this.uploadedLeads.forEach((lead) => {
+      this.setLeadStatus(lead.lead_id, {
+        status: "scheduled",
+        lastCallStatus: "",
+        lastIntent: "",
+        callSid: "",
+        round: 0
+      });
+    });
+    this.loopEnabled = options.loopEnabled;
+    this.loopIntervalHours = options.loopIntervalHours;
+    this.loopIntervalMs = this.loopIntervalHours * HOUR_MS;
+    this.loopRound = 0;
+    this.removedInterestedCount = 0;
+    this.removedNotInterestedCount = 0;
+    this.scheduledStartAt = options.scheduledStartAt.toISOString();
+    this.scheduledTimezone = options.scheduledTimezone;
+    this.scheduledCampaignId = this.currentCampaignId;
+    this.scheduledOptions = {
+      loopEnabled: this.loopEnabled,
+      loopIntervalHours: this.loopIntervalHours
+    };
+
+    const delayMs = Math.max(0, options.scheduledStartAt.getTime() - this.now().getTime());
+    this.scheduleTimer = this.setTimer(() => this.launchScheduledCampaign(), delayMs);
+    if (this.scheduleTimer && typeof this.scheduleTimer.unref === "function") {
+      this.scheduleTimer.unref();
+    }
+
+    this.log("info", "Campaign scheduled", {
+      campaignId: this.currentCampaignId,
+      file: path.basename(this.uploadedCsvPath),
+      scheduledStartAt: this.scheduledStartAt,
+      scheduledTimezone: this.scheduledTimezone,
+      loopEnabled: this.loopEnabled,
+      loopIntervalHours: this.loopEnabled ? this.loopIntervalHours : null
+    });
+
+    return this.getState();
+  }
+
+  launchScheduledCampaign() {
+    if (this.status !== "scheduled") {
+      return;
+    }
+
+    const campaignId = this.scheduledCampaignId || this.currentCampaignId || makeCampaignId();
+    const options = this.scheduledOptions || {};
+    this.scheduleTimer = null;
+    this.scheduledStartAt = null;
+    this.scheduledTimezone = null;
+    this.scheduledCampaignId = null;
+    this.scheduledOptions = null;
+
+    try {
+      this.startNow(campaignId, options);
+    } catch (error) {
+      this.status = "failed";
+      this.log("error", "Scheduled campaign failed to start", {
+        campaignId,
+        error: error.message
+      });
+    }
+  }
+
+  startNow(campaignId = makeCampaignId(), options = {}) {
     const loopEnabled = Boolean(options.loopEnabled);
     const loopIntervalHours = normalizeLoopIntervalHours(options.loopIntervalHours);
 
@@ -100,6 +214,8 @@ class CampaignManager {
     this.currentCampaignId = campaignId || makeCampaignId();
     this.summary = null;
     this.stopRequested = false;
+    this.isPaused = false;
+    this.clearPauseWait();
     this.activeCalls.clear();
     this.pendingLeadIds = new Set(this.uploadedLeads.map((lead) => lead.lead_id));
     this.uploadedLeads.forEach((lead) => {
@@ -148,6 +264,12 @@ class CampaignManager {
       })
       .finally(() => {
         this.activeCalls.clear();
+        this.isPaused = false;
+        this.clearPauseWait();
+        this.scheduledStartAt = null;
+        this.scheduledTimezone = null;
+        this.scheduledCampaignId = null;
+        this.scheduledOptions = null;
         if (!this.loopEnabled) {
           this.pendingLeadIds.clear();
         }
@@ -167,6 +289,12 @@ class CampaignManager {
     };
 
     while (!this.stopRequested && this.pendingLeadIds.size > 0) {
+      await this.waitWhilePaused();
+
+      if (this.stopRequested) {
+        break;
+      }
+
       const activeLeadIds = new Set(
         Array.from(this.activeCalls.values()).map((lead) => lead.lead_id)
       );
@@ -188,6 +316,7 @@ class CampaignManager {
           campaignId: this.currentCampaignId,
           twilioClient: this.twilioClient,
           shouldStop: () => this.stopRequested,
+          waitIfPaused: () => this.waitWhilePaused(),
           onEvent: async (eventName, event) => this.handleCampaignEvent(eventName, event),
           leads: leadsForRound
         });
@@ -247,14 +376,92 @@ class CampaignManager {
     }
   }
 
+  clearScheduledTimer() {
+    if (this.scheduleTimer) {
+      this.clearTimer(this.scheduleTimer);
+      this.scheduleTimer = null;
+    }
+  }
+
+  waitWhilePaused() {
+    if (!this.isPaused || this.stopRequested) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      this.pauseResolve = resolve;
+    });
+  }
+
+  clearPauseWait() {
+    if (this.pauseResolve) {
+      const resolve = this.pauseResolve;
+      this.pauseResolve = null;
+      resolve();
+    }
+  }
+
+  togglePause() {
+    if (this.status !== "running") {
+      throw new Error("No campaign is currently running.");
+    }
+
+    if (this.isPaused) {
+      this.isPaused = false;
+      this.clearPauseWait();
+      this.log("info", "Campaign resumed", {
+        campaignId: this.currentCampaignId,
+        pendingLeadCount: this.pendingLeadIds.size,
+        activeCallCount: this.activeCalls.size
+      });
+      return this.getState();
+    }
+
+    this.isPaused = true;
+    this.log("warn", "Campaign paused", {
+      campaignId: this.currentCampaignId,
+      pendingLeadCount: this.pendingLeadIds.size,
+      activeCallCount: this.activeCalls.size
+    });
+    return this.getState();
+  }
+
   async stop() {
+    if (this.status === "scheduled") {
+      const campaignId = this.currentCampaignId;
+      this.clearScheduledTimer();
+      this.status = "idle";
+      this.stopRequested = false;
+      this.currentCampaignId = null;
+      this.scheduledStartAt = null;
+      this.scheduledTimezone = null;
+      this.scheduledCampaignId = null;
+      this.scheduledOptions = null;
+      this.pendingLeadIds.clear();
+      this.uploadedLeads.forEach((lead) => {
+        this.setLeadStatus(lead.lead_id, {
+          status: "ready",
+          lastCallStatus: "",
+          lastIntent: "",
+          callSid: "",
+          round: 0
+        });
+      });
+      this.log("warn", "Scheduled campaign cancelled", {
+        campaignId
+      });
+      return this.getState();
+    }
+
     if (this.status !== "running" && this.status !== "stopping") {
       throw new Error("No campaign is currently running.");
     }
 
     this.stopRequested = true;
     this.status = "stopping";
+    this.isPaused = false;
     this.clearLoopWait();
+    this.clearPauseWait();
     this.log("warn", "Campaign stop requested", {
       campaignId: this.currentCampaignId,
       activeCallCount: this.activeCalls.size
@@ -406,13 +613,13 @@ class CampaignManager {
       });
     }
 
-    this.log("info", "Lead kept for next loop", {
+    this.log("info", this.loopEnabled ? "Lead kept for next loop" : "Lead unresolved after call", {
       campaignId: outcome.campaign_id,
       leadId,
       callSid: outcome.call_sid,
       callStatus: outcome.call_status,
       interestIntent: outcome.interest_intent,
-      pendingLeadCount: this.pendingLeadIds.size
+      pendingLeadCount: this.loopEnabled ? this.pendingLeadIds.size : 0
     });
   }
 
@@ -440,6 +647,7 @@ class CampaignManager {
         leadId: lead.lead_id,
         leadName: lead.lead_name,
         leadPhone: lead.lead_phone,
+        leadAddress: lead.lead_address || "",
         status: status.status || "ready",
         lastCallStatus: status.lastCallStatus || "",
         lastIntent: status.lastIntent || "",
@@ -463,9 +671,12 @@ class CampaignManager {
       activeCallCount: this.activeCalls.size,
       pendingLeadCount: this.pendingLeadIds.size,
       stopRequested: this.stopRequested,
+      isPaused: this.isPaused,
       loopEnabled: this.loopEnabled,
       loopIntervalHours: this.loopIntervalHours,
       loopRound: this.loopRound,
+      scheduledStartAt: this.scheduledStartAt,
+      scheduledTimezone: this.scheduledTimezone,
       removedInterestedCount: this.removedInterestedCount,
       removedNotInterestedCount: this.removedNotInterestedCount,
       recurringCallList: this.getRecurringCallList(),
@@ -487,6 +698,136 @@ function normalizeLoopIntervalHours(value) {
   return parsed;
 }
 
+function normalizeSchedule(scheduleStartAt, scheduleTimezone, now) {
+  if (scheduleStartAt === undefined || scheduleStartAt === null || String(scheduleStartAt).trim() === "") {
+    return null;
+  }
+
+  const timezone = String(scheduleTimezone || "").trim();
+  if (!timezone) {
+    throw new Error("Schedule time zone is required.");
+  }
+
+  assertValidTimeZone(timezone);
+  const startAt = zonedDateTimeToDate(String(scheduleStartAt).trim(), timezone);
+  if (startAt.getTime() <= now.getTime()) {
+    throw new Error("Schedule time must be in the future.");
+  }
+
+  return { startAt, timezone };
+}
+
+function assertValidTimeZone(timezone) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+  } catch (error) {
+    throw new Error("Schedule time zone must be a valid IANA time zone.");
+  }
+}
+
+function zonedDateTimeToDate(value, timezone) {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
+  );
+  if (!match) {
+    throw new Error("Schedule time must use YYYY-MM-DDTHH:mm format.");
+  }
+
+  const parts = {
+    year: Number.parseInt(match[1], 10),
+    month: Number.parseInt(match[2], 10),
+    day: Number.parseInt(match[3], 10),
+    hour: Number.parseInt(match[4], 10),
+    minute: Number.parseInt(match[5], 10),
+    second: match[6] ? Number.parseInt(match[6], 10) : 0
+  };
+
+  if (!isValidDateTimeParts(parts)) {
+    throw new Error("Schedule time must be a valid calendar date and time.");
+  }
+
+  const localMs = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+  let utcMs = localMs;
+  for (let index = 0; index < 4; index += 1) {
+    utcMs = localMs - getTimeZoneOffsetMs(timezone, new Date(utcMs));
+  }
+
+  const candidate = new Date(utcMs);
+  const roundTrip = getTimeZoneParts(timezone, candidate);
+  if (
+    roundTrip.year !== parts.year ||
+    roundTrip.month !== parts.month ||
+    roundTrip.day !== parts.day ||
+    roundTrip.hour !== parts.hour ||
+    roundTrip.minute !== parts.minute ||
+    roundTrip.second !== parts.second
+  ) {
+    throw new Error("Schedule time is not valid in the selected time zone.");
+  }
+
+  return candidate;
+}
+
+function isValidDateTimeParts(parts) {
+  const date = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second)
+  );
+  return (
+    date.getUTCFullYear() === parts.year &&
+    date.getUTCMonth() === parts.month - 1 &&
+    date.getUTCDate() === parts.day &&
+    date.getUTCHours() === parts.hour &&
+    date.getUTCMinutes() === parts.minute &&
+    date.getUTCSeconds() === parts.second
+  );
+}
+
+function getTimeZoneOffsetMs(timezone, date) {
+  const parts = getTimeZoneParts(timezone, date);
+  const zonedMs = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+  return zonedMs - date.getTime();
+}
+
+function getTimeZoneParts(timezone, date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+  const values = Object.fromEntries(
+    formatter.formatToParts(date).map((part) => [part.type, part.value])
+  );
+  const hour = Number.parseInt(values.hour, 10);
+  return {
+    year: Number.parseInt(values.year, 10),
+    month: Number.parseInt(values.month, 10),
+    day: Number.parseInt(values.day, 10),
+    hour: hour === 24 ? 0 : hour,
+    minute: Number.parseInt(values.minute, 10),
+    second: Number.parseInt(values.second, 10)
+  };
+}
+
 module.exports = {
-  CampaignManager
+  CampaignManager,
+  normalizeSchedule
 };

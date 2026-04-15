@@ -213,3 +213,27 @@ test("static web UI includes recurring call list hooks", async (t) => {
   assert.match(css, /\.lead-table/);
   assert.match(css, /\.status-badge/);
 });
+
+test("static web UI includes campaign scheduling hooks", async (t) => {
+  const app = createApp(new Map(), {
+    cloudflaredStatus: createCloudflaredStatus({ autoStart: false })
+  });
+  const server = app.listen(0, "127.0.0.1");
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await waitForListening(server);
+  const { port } = server.address();
+
+  const response = await fetch(`http://127.0.0.1:${port}/`);
+  const html = await response.text();
+  const jsResponse = await fetch(`http://127.0.0.1:${port}/app.js`);
+  const js = await jsResponse.text();
+
+  assert.equal(response.status, 200);
+  assert.equal(jsResponse.status, 200);
+  assert.match(html, /id="scheduleEnabled"/);
+  assert.match(html, /id="scheduleStartAt"/);
+  assert.match(html, /id="scheduleTimezone"/);
+  assert.match(js, /scheduleStartAt/);
+  assert.match(js, /scheduleTimezone/);
+  assert.match(js, /Campaign scheduled/);
+});

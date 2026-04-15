@@ -12,7 +12,7 @@ At a high level, the bot:
 1. Reads lead records from a CSV file.
 2. Creates outbound Twilio calls to each lead.
 3. Uses Twilio webhooks to control the live call.
-4. Plays the opening prompt:
+4. Waits 1 second, then plays the opening prompt:
 
    ```text
    Hi this is Kevin from Oak and Eagle, are you interested in selling your land?
@@ -23,6 +23,10 @@ At a high level, the bot:
    ```text
    Hi this is Kevin from Oak and Eagle, are you interested in selling your land in Asheville?
    ```
+
+   With ElevenLabs enabled, the static phrase ending in `in` can be played from
+   cached audio, followed by a 0.5-second pause and a Twilio `<Say>` for only
+   the dynamic city name.
 
 5. Parses the lead response as `yes`, `no`, or `unknown`.
 6. If the lead says yes, asks for the best phone number to reach them.
@@ -50,6 +54,9 @@ At a high level, the bot:
 | `run` | Bash wrapper around the campaign CLI. |
 | `src/cli/runCampaign.js` | CLI entrypoint for running a CSV campaign. |
 | `src/campaigns/csvLeads.js` | Parses and validates lead CSV files. |
+| `src/campaigns/dealMachineCsv.js` | Converts checked DealMachine uploads into the app's campaign CSV format. |
+| `src/campaigns/leadAddress.js` | Normalizes and selects supported lead address columns. |
+| `src/campaigns/leadCity.js` | Validates explicit city values and derives city values from supported address shapes. |
 | `src/campaigns/startCampaign.js` | Creates outbound Twilio calls from parsed leads. |
 | `src/server/app.js` | Express app entrypoint and route mounting. |
 | `src/server/cloudflared.js` | Starts and stops Cloudflare Tunnel with the server process. |
@@ -82,6 +89,7 @@ GET /
 Use it to:
 
 1. Upload a lead CSV from your computer.
+   If the file is a DealMachine export, check `Deal Machine CSV` before upload.
 2. Start the uploaded CSV as a Twilio campaign.
 3. End a running campaign.
 4. Monitor upload/start/call-create/failure/stop activity.
@@ -186,15 +194,25 @@ Optional city columns:
 lead_city,city,property_city,situs_city,site_city,mailing_city
 ```
 
+Optional address columns:
+
+```text
+lead_address,address,property_address,situs_address,site_address,mailing_address
+```
+
 If one of those columns contains a valid city, the opening prompt uses it. Blank
 values, placeholders such as `unknown` or `n/a`, numeric values such as ZIP
 codes, and address-like strings with unsupported characters are ignored.
+If no explicit city column is present, the app can derive the city from a
+comma-separated address such as `Eliot Ln, Albrightsville, Pa 18210`. If
+`lead_address` itself is a bare valid city-like value such as `laguna beach`,
+the opening prompt can use that value as the city.
 
 City sample format:
 
 ```csv
-lead_id,lead_name,lead_phone,city
-1,Jon Riemann,+19493008565,Asheville
+lead_id,lead_name,lead_phone,city,address
+1,Jon Riemann,+19493008565,Asheville,123 Oak St
 ```
 
 Each parsed lead becomes:
@@ -204,11 +222,43 @@ Each parsed lead becomes:
   lead_id: "...",
   lead_name: "...",
   lead_phone: "...",
+  lead_address: "...",
   lead_city: "..."
 }
 ```
 
-`lead_city` is omitted when no valid city is found.
+`lead_city` is omitted when no valid city is found. `lead_address` is omitted
+when no supported address column has a value.
+
+### DealMachine Upload Conversion
+
+The browser upload form includes a `Deal Machine CSV` checkbox. When it is
+checked, `POST /campaigns/ui/upload` saves the uploaded file and then rewrites it
+in place before handing it to the campaign manager.
+
+DealMachine input columns:
+
+```text
+contact_id,associated_property_address_full,first_name,last_name,phone_1,phone_2,phone_3
+```
+
+Converted campaign columns:
+
+```text
+lead_id,first_name,last_name,lead_phone,lead_address,lead_city
+```
+
+Conversion behavior:
+
+- `contact_id` becomes `lead_id`.
+- `first_name` and `last_name` are kept so `csvLeads` can build `lead_name`.
+- `phone_1`, `phone_2`, and `phone_3` are checked in order.
+- Blank phone values and `Wireless Excluded` are skipped.
+- US 10-digit phone numbers are normalized to `+1...`.
+- `associated_property_address_full` becomes `lead_address`.
+- `lead_city` is derived from addresses such as `Eliot Ln, Albrightsville, Pa 18210`.
+- If an address field contains only a valid city-like value such as `laguna beach`, it can also be used as `lead_city`.
+- Rows without a lead id, usable phone, or usable name are skipped.
 
 ### 3. Create Twilio Calls
 
@@ -236,6 +286,7 @@ Lead context is attached as query parameters so the webhook can identify the lea
 lead_id
 lead_name
 lead_phone
+lead_address
 lead_city
 campaign_id
 ```
@@ -272,14 +323,30 @@ The human path returns TwiML similar to:
 ```xml
 <Response>
   <Pause length="1"/>
-  <Gather input="speech" speechTimeout="auto" action="/twilio/voice/intent?...">
-    <Play>https://.../twilio/voice/audio/generated-prompt.mp3</Play>
-  </Gather>
+  <Play>https://.../twilio/voice/audio/generated-prompt.mp3</Play>
+  <Gather input="speech" speechTimeout="auto" action="/twilio/voice/intent?..."/>
   <Redirect>/twilio/voice/intent?...</Redirect>
 </Response>
 ```
 
 If ElevenLabs is not enabled, the prompt is spoken with Twilio `<Say>` instead of `<Play>`.
+For a city-specific intro, the TwiML is split so the stable phrase can use
+ElevenLabs audio and the dynamic city can use Twilio voice:
+
+```xml
+<Response>
+  <Pause length="1"/>
+  <Play>https://.../twilio/voice/audio/city-prefix.mp3</Play>
+  <Pause length="0.5"/>
+  <Say>Asheville?</Say>
+  <Gather input="speech" speechTimeout="auto" action="/twilio/voice/intent?..."/>
+  <Redirect>/twilio/voice/intent?...</Redirect>
+</Response>
+```
+
+The 1-second pause gives the answered call a small settling moment before the
+first question. The 0.5-second pause separates the static phrase from the
+injected city name.
 
 ### `POST /twilio/voice/intent`
 
@@ -415,7 +482,7 @@ Current prompts:
 
 ```text
 Hi this is Kevin from Oak and Eagle, are you interested in selling your land?
-Hi this is Kevin from Oak and Eagle, are you interested in selling your land in Asheville?
+Hi this is Kevin from Oak and Eagle, are you interested in selling your land in
 Great, what is the best phone number to reach you?
 Thanks for your time. Have a great day.
 Sorry, I did not catch that. Are you interested in selling your land, yes or no?
@@ -423,8 +490,9 @@ I could not capture the number clearly. Please say the best phone number to reac
 Thank you, we will be in touch soon.
 ```
 
-The city-specific intro is generated at call time from a valid lead city, not as
-a static prompt constant.
+The city-specific intro is assembled at call time. The static prefix ending in
+`in` is part of the warmup prompt list and can be served by ElevenLabs. The city
+name is dynamic and is spoken with Twilio `<Say>` after a 0.5-second pause.
 
 The voicemail prompt comes from:
 
@@ -451,6 +519,10 @@ During calls:
 1. `addSpeech(...)` checks whether a prompt has an ElevenLabs audio URL.
 2. If yes, Twilio receives `<Play>audio-url</Play>`.
 3. If no, Twilio receives `<Say>prompt text</Say>`.
+
+For city-specific intros, only the stable prefix is looked up in the ElevenLabs
+audio map. The city itself is not pre-generated; it is spoken with Twilio voice
+so each lead can receive a personalized city without creating one MP3 per city.
 
 The generated audio route is:
 
@@ -535,6 +607,7 @@ Columns written:
 ```text
 lead_name
 lead_phone
+lead_address
 preferred_phone
 interest_intent
 call_status
@@ -542,7 +615,7 @@ timestamp_utc
 call_transcript
 ```
 
-The transcript column is appended as column `G`, so the original `A:F` column order stays unchanged.
+The transcript column is appended as column `H`.
 
 Only confirmed interested leads are appended to Sheets. Declines, no-answer, busy, canceled, failed, voicemail, and unresolved calls update campaign state but do not create a Sheet row.
 
@@ -704,7 +777,7 @@ Important validation rules:
 | `GET` | `/twilio/voice/audio/:promptId.mp3` | Serves cached ElevenLabs MP3 prompt audio. |
 | `GET` | `/` | Static web campaign console. |
 | `GET` | `/campaigns/ui/state` | Returns current web UI campaign state and activity. |
-| `POST` | `/campaigns/ui/upload` | Uploads a CSV file from the browser. |
+| `POST` | `/campaigns/ui/upload` | Uploads a CSV file from the browser; when `dealMachineCsv=true`, converts a DealMachine export before parsing. |
 | `POST` | `/campaigns/ui/start` | Starts the uploaded CSV as a background campaign. |
 | `POST` | `/campaigns/ui/end` | Requests the running campaign to stop and attempts to end active calls. |
 | `POST` | `/campaigns/:id/start` | Starts a campaign from a JSON body containing `csvPath`. |
@@ -765,7 +838,7 @@ http://SERVER_IP:3000/
 
 1. Start the server with `npm start`.
 2. Open `http://SERVER_IP:3000/`.
-3. Upload a CSV.
+3. Upload a CSV. Check `Deal Machine CSV` first when uploading a DealMachine export.
 4. Enter an optional campaign ID.
 5. Optionally check Run in loop and set the loop interval in hours.
 6. Click Start Campaign.
@@ -946,6 +1019,8 @@ Common changes and where to make them:
 | Change Twilio dialing options | `src/campaigns/startCampaign.js` |
 | Change campaign web UI behavior | `src/server/campaignManager.js`, `src/server/routes/campaigns.js`, and `src/server/public/` |
 | Change retry limit behavior | `src/config/index.js` and route logic in `src/server/routes/twilio.js` |
+| Change DealMachine upload mapping | `src/campaigns/dealMachineCsv.js` and `src/server/routes/campaigns.js` |
+| Change city/address normalization | `src/campaigns/leadCity.js` and `src/campaigns/leadAddress.js` |
 
 ## Practical Debug Checklist
 
@@ -991,7 +1066,7 @@ If Sheets rows do not appear:
 2. Confirm the service account has editor access to the Google Sheet.
 3. Confirm `SHEETS_SPREADSHEET_ID` and `SHEETS_SHEET_NAME`.
 4. Remember the app only writes confirmed interested leads to Sheets.
-5. Confirm the Sheet has column `G` available for `call_transcript`.
+5. Confirm the Sheet has column `H` available for `call_transcript`.
 6. Check logs for `sheets.append.retry` or `SHEETS_APPEND_FAILED`.
 
 If voicemail handling seems odd:

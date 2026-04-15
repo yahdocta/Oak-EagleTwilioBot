@@ -35,7 +35,7 @@ async function withServer(t, sheetsAdapter, options = {}) {
     "/twilio",
     createTwilioRouter({
       sheetsAdapter,
-      promptAudioUrls: new Map(),
+      promptAudioUrls: options.promptAudioUrls || new Map(),
       campaignManager: options.campaignManager
     })
   );
@@ -78,6 +78,16 @@ function assertPromptBeforeGather(twimlText, promptSnippet) {
   assert.ok(promptIndex < gatherIndex, "expected prompt to finish before speech gather starts");
 }
 
+function assertOrderedSnippets(twimlText, snippets) {
+  let lastIndex = -1;
+  for (const snippet of snippets) {
+    const index = twimlText.indexOf(snippet);
+    assert.ok(index >= 0, `expected TwiML containing "${snippet}"`);
+    assert.ok(index > lastIndex, `expected "${snippet}" after previous snippet`);
+    lastIndex = index;
+  }
+}
+
 test("outbound human calls return intro gather TwiML", async (t) => {
   const sheets = makeSheetsRecorder();
   const baseUrl = await withServer(t, sheets.adapter);
@@ -94,16 +104,24 @@ test("outbound human calls return intro gather TwiML", async (t) => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type"), /text\/xml/);
   assert.match(text, /<Gather/);
+  assert.match(text, /<Pause length="1"\/>/);
   assert.match(text, /\/twilio\/voice\/intent\?/);
   assert.match(text, /retry_count=0/);
   assert.match(text, /Hi this is Kevin from Oak and Eagle/);
+  assertOrderedSnippets(text, ['<Pause length="1"/>', "Hi this is Kevin from Oak and Eagle"]);
   assertPromptBeforeGather(text, "Hi this is Kevin from Oak and Eagle");
   assert.equal(sheets.appended.length, 0);
 });
 
 test("outbound human calls include valid lead city in intro prompt", async (t) => {
   const sheets = makeSheetsRecorder();
-  const baseUrl = await withServer(t, sheets.adapter);
+  const promptAudioUrls = new Map([
+    [
+      "Hi this is Kevin from Oak and Eagle, are you interested in selling your land in",
+      "https://audio.example.test/city-prefix.mp3"
+    ]
+  ]);
+  const baseUrl = await withServer(t, sheets.adapter, { promptAudioUrls });
 
   const { text } = await postForm(baseUrl, "/twilio/voice/outbound", {
     lead_id: "lead-city",
@@ -114,9 +132,53 @@ test("outbound human calls include valid lead city in intro prompt", async (t) =
     AnsweredBy: "human"
   });
 
-  assert.match(text, /selling your land in Asheville\?/);
+  assert.match(text, /<Play>https:\/\/audio\.example\.test\/city-prefix\.mp3<\/Play>/);
+  assert.doesNotMatch(text, /<Pause length="0.5"\/>/);
+  assert.match(text, /<Say>Asheville\?<\/Say>/);
   assert.match(text, /lead_city=Asheville/);
-  assertPromptBeforeGather(text, "selling your land in Asheville?");
+  assertOrderedSnippets(text, [
+    '<Pause length="1"/>',
+    "city-prefix.mp3",
+    "Asheville?"
+  ]);
+  assertPromptBeforeGather(text, "city-prefix.mp3");
+  assertPromptBeforeGather(text, "Asheville?");
+});
+
+test("outbound human calls derive city from lead address when lead city is missing", async (t) => {
+  const sheets = makeSheetsRecorder();
+  const baseUrl = await withServer(t, sheets.adapter);
+
+  const { text } = await postForm(baseUrl, "/twilio/voice/outbound", {
+    lead_id: "lead-address-city",
+    lead_name: "Ada Lovelace",
+    lead_phone: "+15551234567",
+    lead_address: "Eliot Ln, Albrightsville, Pa 18210",
+    CallSid: "CA-human-address-city",
+    AnsweredBy: "human"
+  });
+
+  assert.match(text, /<Say>Albrightsville\?<\/Say>/);
+  assert.match(text, /lead_city=Albrightsville/);
+  assertPromptBeforeGather(text, "Albrightsville?");
+});
+
+test("outbound human calls use bare city values from lead address", async (t) => {
+  const sheets = makeSheetsRecorder();
+  const baseUrl = await withServer(t, sheets.adapter);
+
+  const { text } = await postForm(baseUrl, "/twilio/voice/outbound", {
+    lead_id: "lead-bare-city",
+    lead_name: "Jon Riemann",
+    lead_phone: "+19493008565",
+    lead_address: "laguna beach",
+    CallSid: "CA-human-bare-city",
+    AnsweredBy: "human"
+  });
+
+  assert.match(text, /<Say>laguna beach\?<\/Say>/);
+  assert.match(text, /lead_city=laguna\+beach/);
+  assertPromptBeforeGather(text, "laguna beach?");
 });
 
 test("outbound human calls omit invalid lead city from intro prompt", async (t) => {
@@ -215,6 +277,7 @@ test("contact route retries unclear numbers and stores valid preferred numbers f
     lead_id: "lead-contact",
     lead_name: "Ada Lovelace",
     lead_phone: "+15551234567",
+    lead_address: "123 Oak St",
     CallSid: callSid,
     CallStatus: "completed"
   });
@@ -223,6 +286,7 @@ test("contact route retries unclear numbers and stores valid preferred numbers f
   assert.equal(sheets.appended.length, 1);
   assert.equal(sheets.appended[0].lead_name, "Ada Lovelace");
   assert.equal(sheets.appended[0].lead_phone, "+15551234567");
+  assert.equal(sheets.appended[0].lead_address, "123 Oak St");
   assert.equal(sheets.appended[0].preferred_phone, "+15557654321");
   assert.equal(
     sheets.appended[0].call_transcript,

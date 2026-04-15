@@ -47,6 +47,187 @@ test("CampaignManager rejects starting without an uploaded CSV", () => {
   assert.equal(manager.getState().status, "idle");
 });
 
+test("CampaignManager schedules a non-loop campaign in the selected time zone", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign.csv", makeCsv());
+  const createdCalls = [];
+  let scheduledCallback;
+  let scheduledDelay;
+  const manager = new CampaignManager({
+    config: buildTestConfig(),
+    twilioClientFactory: () => ({
+      calls: {
+        create: async (payload) => {
+          createdCalls.push(payload);
+          return { sid: "CA-scheduled" };
+        }
+      }
+    }),
+    now: () => new Date("2026-04-15T12:00:00.000Z"),
+    setTimer: (callback, delay) => {
+      scheduledCallback = callback;
+      scheduledDelay = delay;
+      return { id: "timer-1" };
+    },
+    clearTimer: () => {}
+  });
+
+  manager.setUploadedCsv(csvPath);
+  const state = manager.start("scheduled-non-loop", {
+    scheduleStartAt: "2026-04-15T09:30",
+    scheduleTimezone: "America/New_York"
+  });
+
+  assert.equal(state.status, "scheduled");
+  assert.equal(state.scheduledStartAt, "2026-04-15T13:30:00.000Z");
+  assert.equal(state.scheduledTimezone, "America/New_York");
+  assert.equal(state.loopEnabled, false);
+  assert.equal(scheduledDelay, 90 * 60 * 1000);
+  assert.equal(createdCalls.length, 0);
+
+  scheduledCallback();
+  await manager.runPromise;
+
+  const finishedState = manager.getState();
+  assert.equal(finishedState.status, "completed");
+  assert.equal(finishedState.campaignId, "scheduled-non-loop");
+  assert.equal(finishedState.scheduledStartAt, null);
+  assert.equal(finishedState.scheduledTimezone, null);
+  assert.equal(createdCalls.length, 1);
+});
+
+test("CampaignManager schedules a looped campaign and keeps loop options for launch", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign.csv", makeCsv());
+  const createdCalls = [];
+  let scheduledCallback;
+  let waitCount = 0;
+  let manager;
+  manager = new CampaignManager({
+    config: buildTestConfig(),
+    twilioClientFactory: () => ({
+      calls: {
+        create: async (payload) => {
+          const sid = `CA-scheduled-loop-${createdCalls.length + 1}`;
+          createdCalls.push(payload);
+          return { sid };
+        }
+      }
+    }),
+    now: () => new Date("2026-04-15T12:00:00.000Z"),
+    setTimer: (callback) => {
+      scheduledCallback = callback;
+      return { id: "timer-loop" };
+    },
+    clearTimer: () => {},
+    sleep: async () => {
+      waitCount += 1;
+      if (waitCount === 1) {
+        manager.handleCallOutcome({
+          campaign_id: "scheduled-loop",
+          lead_id: "lead-1",
+          call_sid: "CA-scheduled-loop-1",
+          call_status: "completed",
+          interest_intent: "no"
+        });
+      }
+    }
+  });
+
+  manager.setUploadedCsv(csvPath);
+  const scheduledState = manager.start("scheduled-loop", {
+    loopEnabled: true,
+    loopIntervalHours: 0.25,
+    scheduleStartAt: "2026-04-15T14:00",
+    scheduleTimezone: "UTC"
+  });
+
+  assert.equal(scheduledState.status, "scheduled");
+  assert.equal(scheduledState.loopEnabled, true);
+  assert.equal(scheduledState.loopIntervalHours, 0.25);
+  assert.equal(scheduledState.pendingLeadCount, 1);
+
+  scheduledCallback();
+  await manager.runPromise;
+
+  const state = manager.getState();
+  assert.equal(state.status, "completed");
+  assert.equal(state.summary.loopEnabled, true);
+  assert.equal(state.summary.loopRound, 1);
+  assert.equal(state.summary.removedNotInterestedCount, 1);
+  assert.equal(createdCalls.length, 1);
+});
+
+test("CampaignManager cancels a scheduled campaign before it starts", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign.csv", makeCsv());
+  const clearedTimers = [];
+  const manager = new CampaignManager({
+    config: buildTestConfig(),
+    twilioClientFactory: () => ({ calls: { create: async () => ({ sid: "CA-unused" }) } }),
+    now: () => new Date("2026-04-15T12:00:00.000Z"),
+    setTimer: () => "scheduled-timer",
+    clearTimer: (timer) => clearedTimers.push(timer)
+  });
+
+  manager.setUploadedCsv(csvPath);
+  manager.start("cancel-scheduled", {
+    scheduleStartAt: "2026-04-15T13:00",
+    scheduleTimezone: "UTC"
+  });
+
+  const state = await manager.stop();
+
+  assert.equal(state.status, "idle");
+  assert.equal(state.campaignId, null);
+  assert.equal(state.scheduledStartAt, null);
+  assert.deepEqual(clearedTimers, ["scheduled-timer"]);
+  assert.equal(
+    state.activity.some((entry) => entry.message === "Scheduled campaign cancelled"),
+    true
+  );
+});
+
+test("CampaignManager validates scheduled start edge cases", () => {
+  const manager = new CampaignManager({
+    config: buildTestConfig(),
+    twilioClientFactory: () => ({ calls: { create: async () => ({ sid: "CA-unused" }) } }),
+    now: () => new Date("2026-04-15T12:00:00.000Z")
+  });
+  const dir = makeTempDir();
+  manager.setUploadedCsv(writeTempFile(dir, "campaign.csv", makeCsv()));
+
+  assert.throws(
+    () => manager.start("missing-zone", { scheduleStartAt: "2026-04-15T13:00" }),
+    /Schedule time zone is required/
+  );
+  assert.throws(
+    () =>
+      manager.start("bad-zone", {
+        scheduleStartAt: "2026-04-15T13:00",
+        scheduleTimezone: "Mars/Olympus"
+      }),
+    /valid IANA time zone/
+  );
+  assert.throws(
+    () =>
+      manager.start("past", {
+        scheduleStartAt: "2026-04-15T11:59",
+        scheduleTimezone: "UTC"
+      }),
+    /Schedule time must be in the future/
+  );
+  assert.throws(
+    () =>
+      manager.start("dst-gap", {
+        scheduleStartAt: "2026-03-08T02:30",
+        scheduleTimezone: "America/New_York"
+      }),
+    /not valid in the selected time zone/
+  );
+  assert.equal(manager.getState().status, "idle");
+});
+
 test("CampaignManager stop ends active calls and records the stop request", async () => {
   const endedCalls = [];
   const calls = (callSid) => ({
@@ -83,6 +264,163 @@ test("CampaignManager stop ends active calls and records the stop request", asyn
     manager.getState().activity.some((entry) => entry.message === "Campaign stop requested"),
     true
   );
+});
+
+test("CampaignManager pauses loop dialing until resumed", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(
+    dir,
+    "campaign.csv",
+    "lead_id,lead_name,lead_phone\nlead-1,Ada Lovelace,+15550000001\n"
+  );
+  const createdCalls = [];
+  let manager;
+  let sleepResolve;
+  let pauseWaitStarted = false;
+  let pauseWaitResolve;
+
+  manager = new CampaignManager({
+    config: buildTestConfig(),
+    twilioClientFactory: () => ({
+      calls: {
+        create: async (payload) => {
+          const sid = `CA-pause-${createdCalls.length + 1}`;
+          createdCalls.push({ sid, payload });
+          return { sid };
+        }
+      }
+    }),
+    sleep: async () =>
+      new Promise((resolve) => {
+        sleepResolve = resolve;
+      })
+  });
+
+  manager.setUploadedCsv(csvPath);
+  const originalHandleCampaignEvent = manager.handleCampaignEvent.bind(manager);
+  manager.handleCampaignEvent = (eventName, event) => {
+    originalHandleCampaignEvent(eventName, event);
+    if (eventName === "campaign.call_created" && event.callSid === "CA-pause-1") {
+      manager.handleCallOutcome({
+        campaign_id: "pause-test",
+        lead_id: "lead-1",
+        call_sid: event.callSid,
+        call_status: "no-answer",
+        interest_intent: "unknown"
+      });
+    }
+    if (eventName === "campaign.call_created" && event.callSid === "CA-pause-2") {
+      manager.handleCallOutcome({
+        campaign_id: "pause-test",
+        lead_id: "lead-1",
+        call_sid: event.callSid,
+        call_status: "completed",
+        interest_intent: "no"
+      });
+    }
+  };
+  manager.start("pause-test", { loopEnabled: true, loopIntervalHours: 0.1 });
+
+  while (!sleepResolve) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  manager.togglePause();
+  assert.equal(manager.getState().isPaused, true);
+  assert.equal(manager.getState().status, "running");
+  assert.equal(
+    manager.getState().activity.some((entry) => entry.message === "Campaign paused"),
+    true
+  );
+
+  const originalWaitWhilePaused = manager.waitWhilePaused.bind(manager);
+  manager.waitWhilePaused = async () => {
+    if (pauseWaitStarted) {
+      return originalWaitWhilePaused();
+    }
+
+    pauseWaitStarted = true;
+    await new Promise((resolve) => {
+      pauseWaitResolve = resolve;
+    });
+    return originalWaitWhilePaused();
+  };
+
+  sleepResolve();
+  while (!pauseWaitStarted) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.equal(createdCalls.length, 1);
+  assert.equal(manager.runPromise !== null, true);
+
+  manager.togglePause();
+  pauseWaitResolve();
+  await manager.runPromise;
+
+  const state = manager.getState();
+  assert.equal(state.status, "completed");
+  assert.equal(state.isPaused, false);
+  assert.equal(createdCalls.length, 2);
+  assert.equal(
+    state.activity.some((entry) => entry.message === "Campaign resumed"),
+    true
+  );
+});
+
+test("CampaignManager pauses queued leads in the current dial round", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(
+    dir,
+    "campaign.csv",
+    [
+      "lead_id,lead_name,lead_phone",
+      "lead-1,Ada Lovelace,+15550000001",
+      "lead-2,Grace Hopper,+15550000002"
+    ].join("\n") + "\n"
+  );
+  const createdCalls = [];
+  let manager;
+
+  manager = new CampaignManager({
+    config: buildTestConfig({ batch: { maxConcurrency: 1 } }),
+    twilioClientFactory: () => ({
+      calls: {
+        create: async (payload) => {
+          const sid = `CA-current-round-${createdCalls.length + 1}`;
+          createdCalls.push({ sid, payload });
+          return { sid };
+        }
+      }
+    })
+  });
+
+  manager.setUploadedCsv(csvPath);
+  const originalHandleCampaignEvent = manager.handleCampaignEvent.bind(manager);
+  manager.handleCampaignEvent = (eventName, event) => {
+    originalHandleCampaignEvent(eventName, event);
+    if (eventName === "campaign.call_created" && event.callSid === "CA-current-round-1") {
+      manager.togglePause();
+    }
+  };
+
+  manager.start("current-round-pause");
+
+  while (createdCalls.length < 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(manager.getState().isPaused, true);
+  assert.equal(createdCalls.length, 1);
+
+  manager.togglePause();
+  await manager.runPromise;
+
+  const state = manager.getState();
+  assert.equal(state.status, "completed");
+  assert.equal(createdCalls.length, 2);
+  assert.equal(createdCalls[1].payload.to, "+15550000002");
 });
 
 test("CampaignManager loop keeps no-answer leads and removes yes or no intent leads", async () => {
@@ -196,6 +534,35 @@ test("CampaignManager marks no intent as declined even outside loop pending stat
   assert.equal(lead.lastIntent, "no");
   assert.equal(lead.callSid, "CA-non-loop-no");
   assert.equal(manager.getState().activity[0].message, "Lead declined and removed");
+});
+
+test("CampaignManager labels non-loop voicemail outcomes as unresolved", () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign.csv", makeCsv());
+  const manager = new CampaignManager({
+    config: buildTestConfig(),
+    twilioClientFactory: () => ({ calls: { create: async () => ({ sid: "CA-unused" }) } })
+  });
+
+  manager.setUploadedCsv(csvPath);
+  manager.currentCampaignId = "non-loop-voicemail";
+  manager.loopEnabled = false;
+  manager.pendingLeadIds.add("lead-1");
+  manager.handleCallOutcome({
+    campaign_id: "non-loop-voicemail",
+    lead_id: "lead-1",
+    call_sid: "CA-non-loop-voicemail",
+    call_status: "voicemail",
+    interest_intent: "v/f"
+  });
+
+  const [lead] = manager.getState().recurringCallList;
+  const [activity] = manager.getState().activity;
+  assert.equal(lead.status, "unresolved");
+  assert.equal(lead.lastCallStatus, "voicemail");
+  assert.equal(lead.lastIntent, "v/f");
+  assert.equal(activity.message, "Lead unresolved after call");
+  assert.equal(activity.meta.pendingLeadCount, 0);
 });
 
 test("CampaignManager exposes recurring call list statuses", () => {

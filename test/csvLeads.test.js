@@ -73,6 +73,24 @@ test("parseLeadsCsv ignores invalid lead city values", () => {
   ]);
 });
 
+test("parseLeadsCsv keeps lead address values from known address columns", () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(
+    dir,
+    "address.csv",
+    "lead_id,lead_name,lead_phone,address\nabc,Jaden Moreno,555-111-2222, 123 Oak St  \n"
+  );
+
+  assert.deepEqual(parseLeadsCsv(csvPath), [
+    {
+      lead_id: "abc",
+      lead_name: "Jaden Moreno",
+      lead_phone: "555-111-2222",
+      lead_address: "123 Oak St"
+    }
+  ]);
+});
+
 test("parseLeadsCsv preserves quoted commas and skips empty lines", () => {
   const dir = makeTempDir();
   const csvPath = writeTempFile(

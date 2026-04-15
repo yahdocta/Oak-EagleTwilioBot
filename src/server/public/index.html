@@ -47,10 +47,14 @@
       <section class="workspace">
         <form id="uploadForm" class="panel">
           <h2>Upload CSV</h2>
-          <p>Use columns lead_id, lead_phone, and either lead_name or first_name plus last_name.</p>
+          <p>Use columns lead_id, lead_phone, and either lead_name or first_name plus last_name. Optional city and address columns are kept with each lead.</p>
           <label class="file-picker">
             <input id="csvInput" type="file" name="csv" accept=".csv,text/csv" required />
             <span id="fileName">Choose a CSV file</span>
+          </label>
+          <label class="checkbox-row" for="dealMachineCsv">
+            <input id="dealMachineCsv" name="dealMachineCsv" type="checkbox" />
+            Deal Machine CSV
           </label>
           <button type="submit">Upload CSV</button>
           <p id="uploadedFile" class="muted">No CSV uploaded yet.</p>
@@ -73,8 +77,26 @@
             step="0.1"
             value="24"
           />
+          <label class="checkbox-row" for="scheduleEnabled">
+            <input id="scheduleEnabled" name="scheduleEnabled" type="checkbox" />
+            <span>Schedule for later</span>
+          </label>
+          <label for="scheduleStartAt">Start date and time</label>
+          <input id="scheduleStartAt" name="scheduleStartAt" type="datetime-local" />
+          <label for="scheduleTimezone">Time zone</label>
+          <select id="scheduleTimezone" name="scheduleTimezone">
+            <option value="America/New_York">Eastern Time</option>
+            <option value="America/Chicago">Central Time</option>
+            <option value="America/Denver">Mountain Time</option>
+            <option value="America/Los_Angeles">Pacific Time</option>
+            <option value="America/Phoenix">Arizona Time</option>
+            <option value="America/Anchorage">Alaska Time</option>
+            <option value="Pacific/Honolulu">Hawaii Time</option>
+            <option value="UTC">UTC</option>
+          </select>
           <div class="button-row">
             <button id="startButton" type="submit">Start Campaign</button>
+            <button id="pauseButton" class="secondary" type="button">Pause Campaign</button>
             <button id="endButton" class="danger" type="button">End Campaign</button>
           </div>
           <p id="summaryText" class="muted">Upload a CSV, then start a campaign.</p>
@@ -92,6 +114,7 @@
               <tr>
                 <th>Lead</th>
                 <th>Phone</th>
+                <th>Address</th>
                 <th>Status</th>
                 <th>Last call</th>
                 <th>Intent</th>

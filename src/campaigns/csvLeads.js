@@ -1,5 +1,6 @@
 const fs = require("fs");
 const { parse } = require("csv-parse/sync");
+const { getLeadAddress } = require("./leadAddress");
 const { getLeadCity } = require("./leadCity");
 
 const REQUIRED_COLUMNS = ["lead_id", "lead_phone"];
@@ -53,6 +54,10 @@ function parseLeadsCsv(csvPath) {
     const leadCity = getLeadCity(record);
     if (leadCity) {
       lead.lead_city = leadCity;
+    }
+    const leadAddress = getLeadAddress(record);
+    if (leadAddress) {
+      lead.lead_address = leadAddress;
     }
     return lead;
   });

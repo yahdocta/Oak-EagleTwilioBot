@@ -42,6 +42,8 @@ Use this file as the quick orientation map before changing the project. The full
 | Service wiring | `src/server/services.js` |
 | Campaign CLI | `src/cli/runCampaign.js` |
 | CSV parsing | `src/campaigns/csvLeads.js` |
+| DealMachine CSV conversion | `src/campaigns/dealMachineCsv.js` |
+| Lead address normalization | `src/campaigns/leadAddress.js` |
 | Lead city validation | `src/campaigns/leadCity.js` |
 | Outbound dialing | `src/campaigns/startCampaign.js` |
 | Yes/no parsing | `src/intent/interest.js` |
@@ -57,6 +59,7 @@ Use this file as the quick orientation map before changing the project. The full
 If the user asks to change Kevin's call script:
 
 - Start with `src/server/voicePrompts.js`.
+- City-specific intros are split: the static prefix ending in `in` may use ElevenLabs audio, then Twilio `<Say>` injects only the city after a 0.5-second pause. The outbound route also adds a 1-second pause before the first question.
 - If voicemail wording changes, check `.env` / `.env.example` for `TWILIO_VOICEMAIL_TEXT`.
 - If using ElevenLabs, remember prompts are generated and cached under `.cache/elevenlabs`.
 
@@ -64,6 +67,7 @@ If the user asks about how calls start:
 
 - Read `src/cli/runCampaign.js`.
 - Read `src/campaigns/csvLeads.js`.
+- For web-uploaded DealMachine exports, read `src/campaigns/dealMachineCsv.js` and `src/server/routes/campaigns.js`.
 - Read `src/campaigns/startCampaign.js`.
 
 If the user asks about the web UI:

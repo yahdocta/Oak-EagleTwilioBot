@@ -6,6 +6,8 @@ const { logger } = require("../../utils/logger");
 const { parseInterestIntent, parsePreferredPhone } = require("../../intent");
 const {
   buildOutboundIntroPrompt,
+  getOutboundIntroCity,
+  OUTBOUND_INTRO_CITY_PREFIX_PROMPT,
   CONTACT_REQUEST_PROMPT,
   GOODBYE_PROMPT,
   INTENT_RETRY_PROMPT,
@@ -33,6 +35,7 @@ function collectCallContext(req) {
     lead_id: source.lead_id || "",
     lead_name: source.lead_name || "",
     lead_phone: source.lead_phone || "",
+    lead_address: source.lead_address || source.address || "",
     lead_city: source.lead_city || source.city || "",
     campaign_id: source.campaign_id || "",
     call_sid: source.CallSid || source.call_sid || "",
@@ -75,6 +78,27 @@ function addPromptThenGather(voiceResponse, promptText, gatherOptions, redirectU
   voiceResponse.redirect({ method: "POST" }, redirectUrl);
 }
 
+function addOutboundIntroThenGather(voiceResponse, context, gatherOptions, redirectUrl, speechOptions) {
+  const city = getOutboundIntroCity(context);
+  if (!city) {
+    addPromptThenGather(
+      voiceResponse,
+      buildOutboundIntroPrompt(context),
+      gatherOptions,
+      redirectUrl,
+      speechOptions
+    );
+    return context;
+  }
+
+  const contextWithCity = { ...context, lead_city: city };
+  addSpeech(voiceResponse, OUTBOUND_INTRO_CITY_PREFIX_PROMPT, speechOptions);
+  voiceResponse.say({ voice: speechOptions.config.twilio.voice || undefined }, `${city}?`);
+  voiceResponse.gather(gatherOptions);
+  voiceResponse.redirect({ method: "POST" }, redirectUrl);
+  return contextWithCity;
+}
+
 const TERMINAL_CALL_STATUSES = new Set(["completed", "busy", "failed", "no-answer", "canceled"]);
 const UNANSWERED_CALL_STATUSES = new Set(["busy", "no-answer", "canceled"]);
 const callOutcomeState = new Map();
@@ -91,6 +115,7 @@ function mergeCallOutcomeState(context, updates = {}) {
     lead_id: context.lead_id || existing.lead_id || "",
     lead_name: context.lead_name || existing.lead_name || "",
     lead_phone: context.lead_phone || existing.lead_phone || "",
+    lead_address: context.lead_address || existing.lead_address || "",
     lead_city: context.lead_city || existing.lead_city || "",
     campaign_id: context.campaign_id || existing.campaign_id || "",
     preferred_phone: existing.preferred_phone || "",
@@ -205,8 +230,12 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls, cam
       }
 
       voiceResponse.pause({ length: 1 });
-      const actionUrl = `/twilio/voice/intent?${buildQuery(context, { retry_count: 0 })}`;
-      addPromptThenGather(voiceResponse, buildOutboundIntroPrompt(context.lead_city), {
+      const introContext = { ...context, lead_city: getOutboundIntroCity(context) || context.lead_city };
+      if (introContext.lead_city !== context.lead_city) {
+        mergeCallOutcomeState(context, { lead_city: introContext.lead_city });
+      }
+      const actionUrl = `/twilio/voice/intent?${buildQuery(introContext, { retry_count: 0 })}`;
+      addOutboundIntroThenGather(voiceResponse, introContext, {
         input: "speech",
         speechTimeout: "auto",
         action: actionUrl,
@@ -380,6 +409,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls, cam
       lead_id: context.lead_id || (savedState && savedState.lead_id) || "",
       lead_name: context.lead_name || (savedState && savedState.lead_name) || "",
       lead_phone: context.lead_phone || (savedState && savedState.lead_phone) || "",
+      lead_address: context.lead_address || (savedState && savedState.lead_address) || "",
       campaign_id: context.campaign_id || (savedState && savedState.campaign_id) || "",
       call_sid: context.call_sid,
       preferred_phone: (savedState && savedState.preferred_phone) || "",
