@@ -4,6 +4,9 @@ const uploadUrl = "/campaigns/ui/upload";
 const startUrl = "/campaigns/ui/start";
 const endUrl = "/campaigns/ui/end";
 const pauseUrl = "/campaigns/ui/pause";
+const recurringCsvSaveUrl = "/campaigns/ui/recurring-leads/save-csv";
+const recurringLeadRemoveUrl = (leadId) =>
+  `/campaigns/ui/recurring-leads/${encodeURIComponent(leadId)}/remove`;
 
 const elements = {
   uploadForm: document.querySelector("#uploadForm"),
@@ -29,13 +32,28 @@ const elements = {
   endButton: document.querySelector("#endButton"),
   refreshButton: document.querySelector("#refreshButton"),
   summaryText: document.querySelector("#summaryText"),
+  recurringSort: document.querySelector("#recurringSort"),
+  saveRecurringCsvButton: document.querySelector("#saveRecurringCsvButton"),
   recurringSummary: document.querySelector("#recurringSummary"),
+  recurringTableWrap: document.querySelector("#recurringTableWrap"),
+  recurringResizeHandle: document.querySelector("#recurringResizeHandle"),
   recurringLeadList: document.querySelector("#recurringLeadList"),
+  leadDetailDialog: document.querySelector("#leadDetailDialog"),
+  leadDetailTitle: document.querySelector("#leadDetailTitle"),
+  leadDetailMeta: document.querySelector("#leadDetailMeta"),
+  leadDetailTranscript: document.querySelector("#leadDetailTranscript"),
   activityLog: document.querySelector("#activityLog"),
   toast: document.querySelector("#toast")
 };
 
 let toastTimer = null;
+let recurringLeadsById = new Map();
+let currentRecurringLeads = [];
+const recurringTableHeight = {
+  min: 220,
+  max: 760,
+  current: 360
+};
 
 function showToast(message) {
   elements.toast.textContent = message;
@@ -91,6 +109,43 @@ async function readJson(response) {
   return payload;
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function setRecurringTableHeight(height) {
+  const nextHeight = clamp(Math.round(height), recurringTableHeight.min, recurringTableHeight.max);
+  recurringTableHeight.current = nextHeight;
+  elements.recurringTableWrap.style.maxHeight = `${nextHeight}px`;
+  elements.recurringResizeHandle.setAttribute("aria-valuenow", String(nextHeight));
+}
+
+function startRecurringResize(event) {
+  event.preventDefault();
+  const startY = event.clientY;
+  const startHeight = elements.recurringTableWrap.getBoundingClientRect().height;
+  elements.recurringResizeHandle.setPointerCapture(event.pointerId);
+  document.body.classList.add("resizing-recurring-calls");
+
+  function moveResize(pointerEvent) {
+    setRecurringTableHeight(startHeight + pointerEvent.clientY - startY);
+  }
+
+  function stopResize(pointerEvent) {
+    if (elements.recurringResizeHandle.hasPointerCapture(pointerEvent.pointerId)) {
+      elements.recurringResizeHandle.releasePointerCapture(pointerEvent.pointerId);
+    }
+    document.body.classList.remove("resizing-recurring-calls");
+    window.removeEventListener("pointermove", moveResize);
+    window.removeEventListener("pointerup", stopResize);
+    window.removeEventListener("pointercancel", stopResize);
+  }
+
+  window.addEventListener("pointermove", moveResize);
+  window.addEventListener("pointerup", stopResize);
+  window.addEventListener("pointercancel", stopResize);
+}
+
 function renderSummary(state) {
   if (state.status === "scheduled" && state.scheduledStartAt) {
     const timezone = state.scheduledTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -103,7 +158,7 @@ function renderSummary(state) {
 
   if (!state.summary) {
     if (state.uploadedCsv) {
-      elements.summaryText.textContent = "Ready to start.";
+      elements.summaryText.textContent = `${state.uploadedLeadCount || 0} leads ready.`;
       return;
     }
     elements.summaryText.textContent = "Upload a CSV, then start a campaign.";
@@ -112,8 +167,9 @@ function renderSummary(state) {
 
   const skippedCount = state.summary.skippedCount || 0;
   const pendingLeadCount = state.summary.pendingLeadCount ?? state.pendingLeadCount ?? 0;
+  const displayedLeadCount = state.uploadedLeadCount ?? state.summary.totalLeads;
   elements.summaryText.textContent = [
-    `${state.summary.totalLeads} leads`,
+    `${displayedLeadCount} leads`,
     `${state.summary.successCount} calls created`,
     `${state.summary.failureCount} failed`,
     `${skippedCount} skipped`,
@@ -174,14 +230,117 @@ function formatLeadStatus(status) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function isCompletedCall(lead) {
+  return lead.lastCallStatus === "completed";
+}
+
+function getLeadSortTime(lead) {
+  const value = lead.completedAt || lead.updatedAt || "";
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getIntentSortPriority(lead) {
+  const intent = String(lead.lastIntent || "").toLowerCase();
+  const callStatus = String(lead.lastCallStatus || "").toLowerCase();
+  const status = String(lead.status || "").toLowerCase();
+
+  if (intent === "yes") {
+    return 0;
+  }
+
+  if (intent === "no") {
+    return 1;
+  }
+
+  if (intent === "v/f" || callStatus === "voicemail" || status === "voicemail") {
+    return 2;
+  }
+
+  if (["failed", "no-answer", "busy", "canceled", "call-create-failed"].includes(callStatus)) {
+    return 3;
+  }
+
+  return 4;
+}
+
+function sortRecurringLeads(leads) {
+  const sortMode = elements.recurringSort.value;
+  const sortedLeads = [...(leads || [])];
+
+  if (sortMode === "time_desc") {
+    sortedLeads.sort((left, right) => getLeadSortTime(right) - getLeadSortTime(left));
+  }
+
+  if (sortMode === "intent") {
+    sortedLeads.sort((left, right) => {
+      const priorityDifference = getIntentSortPriority(left) - getIntentSortPriority(right);
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+      return getLeadSortTime(right) - getLeadSortTime(left);
+    });
+  }
+
+  return sortedLeads;
+}
+
+function appendDetail(meta, label, value) {
+  if (!value) {
+    return;
+  }
+
+  const term = document.createElement("dt");
+  const description = document.createElement("dd");
+  term.textContent = label;
+  description.textContent = value;
+  meta.append(term, description);
+}
+
+function openLeadDetail(leadId) {
+  const lead = recurringLeadsById.get(leadId);
+  if (!lead || !isCompletedCall(lead)) {
+    return;
+  }
+
+  elements.leadDetailTitle.textContent = `${lead.leadName || "Lead"} transcript`;
+  elements.leadDetailMeta.innerHTML = "";
+  appendDetail(elements.leadDetailMeta, "Lead ID", lead.leadId);
+  appendDetail(elements.leadDetailMeta, "Phone", lead.leadPhone);
+  appendDetail(elements.leadDetailMeta, "Address", lead.leadAddress);
+  appendDetail(elements.leadDetailMeta, "Intent", lead.lastIntent || "Unknown");
+  appendDetail(elements.leadDetailMeta, "Preferred phone", lead.preferredPhone);
+  appendDetail(elements.leadDetailMeta, "Call SID", lead.callSid);
+  appendDetail(elements.leadDetailMeta, "Completed", lead.completedAt);
+  elements.leadDetailTranscript.textContent = lead.callTranscript || "No transcript captured.";
+  elements.leadDetailDialog.showModal();
+}
+
+async function removeRecurringLead(leadId) {
+  const response = await fetch(recurringLeadRemoveUrl(leadId), { method: "POST" });
+  const state = await readJson(response);
+  renderState(state);
+  showToast("Lead removed from recurring calls.");
+}
+
+async function saveRecurringCsv() {
+  const response = await fetch(recurringCsvSaveUrl, { method: "POST" });
+  const payload = await readJson(response);
+  renderState(payload.state);
+  showToast(`Saved ${payload.savedCsv.name}.`);
+}
+
 function renderRecurringCalls(leads) {
   elements.recurringLeadList.innerHTML = "";
+  currentRecurringLeads = leads || [];
+  const sortedLeads = sortRecurringLeads(currentRecurringLeads);
+  recurringLeadsById = new Map(currentRecurringLeads.map((lead) => [lead.leadId, lead]));
 
-  if (!leads || leads.length === 0) {
+  if (!currentRecurringLeads || currentRecurringLeads.length === 0) {
     elements.recurringSummary.textContent = "No leads uploaded.";
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     cell.className = "empty-cell";
     cell.textContent = "Upload a CSV to see the recurring call list.";
     row.appendChild(cell);
@@ -189,12 +348,26 @@ function renderRecurringCalls(leads) {
     return;
   }
 
-  const pendingCount = leads.filter((lead) => lead.isPending).length;
-  const activeCount = leads.filter((lead) => lead.isActive).length;
+  const pendingCount = currentRecurringLeads.filter((lead) => lead.isPending).length;
+  const activeCount = currentRecurringLeads.filter((lead) => lead.isActive).length;
   elements.recurringSummary.textContent = `${pendingCount} pending | ${activeCount} active`;
 
-  leads.forEach((lead) => {
+  sortedLeads.forEach((lead) => {
     const row = document.createElement("tr");
+    const canOpenDetails = isCompletedCall(lead);
+    if (canOpenDetails) {
+      row.className = "clickable-row";
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `Open transcript for ${lead.leadName || lead.leadId}`);
+      row.addEventListener("click", () => openLeadDetail(lead.leadId));
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openLeadDetail(lead.leadId);
+        }
+      });
+    }
 
     const leadCell = document.createElement("td");
     const leadName = document.createElement("strong");
@@ -228,6 +401,33 @@ function renderRecurringCalls(leads) {
     callSidCell.className = "sid-cell";
     callSidCell.textContent = lead.callSid || "None";
 
+    const actionCell = document.createElement("td");
+    const transcriptButton = document.createElement("button");
+    transcriptButton.type = "button";
+    transcriptButton.className = "secondary table-action";
+    transcriptButton.textContent = "Transcript";
+    transcriptButton.disabled = !canOpenDetails;
+    transcriptButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openLeadDetail(lead.leadId);
+    });
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "danger table-action";
+    removeButton.textContent = "Remove";
+    removeButton.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      removeButton.disabled = true;
+      try {
+        await removeRecurringLead(lead.leadId);
+      } catch (error) {
+        removeButton.disabled = false;
+        showToast(error.message);
+      }
+    });
+    actionCell.append(transcriptButton, removeButton);
+
     row.append(
       leadCell,
       phoneCell,
@@ -236,7 +436,8 @@ function renderRecurringCalls(leads) {
       callStatusCell,
       intentCell,
       roundCell,
-      callSidCell
+      callSidCell,
+      actionCell
     );
     elements.recurringLeadList.appendChild(row);
   });
@@ -254,6 +455,8 @@ function renderState(state) {
   elements.pauseButton.disabled = !isRunning;
   elements.pauseButton.textContent = state.isPaused ? "Resume Campaign" : "Pause Campaign";
   elements.endButton.disabled = !isBusy;
+  elements.saveRecurringCsvButton.disabled =
+    !state.recurringCallList || state.recurringCallList.length === 0;
   elements.uploadedFile.textContent = state.uploadedCsv
     ? `Uploaded: ${state.uploadedCsv.name}`
     : "No CSV uploaded yet.";
@@ -384,6 +587,24 @@ elements.pauseButton.addEventListener("click", async () => {
 elements.refreshButton.addEventListener("click", () => {
   refreshDashboard().catch((error) => showToast(error.message));
 });
+
+elements.recurringSort.addEventListener("change", () => {
+  renderRecurringCalls(currentRecurringLeads);
+});
+
+elements.saveRecurringCsvButton.addEventListener("click", async () => {
+  elements.saveRecurringCsvButton.disabled = true;
+  try {
+    await saveRecurringCsv();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    elements.saveRecurringCsvButton.disabled = currentRecurringLeads.length === 0;
+  }
+});
+
+elements.recurringResizeHandle.addEventListener("pointerdown", startRecurringResize);
+setRecurringTableHeight(recurringTableHeight.current);
 
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 if (

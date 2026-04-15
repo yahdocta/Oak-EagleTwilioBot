@@ -2,8 +2,8 @@
 
 This project is a Node.js outbound voice bot for landowner outreach. It starts calls through Twilio from CSV lead lists, plays a natural voice prompt using ElevenLabs-generated audio when configured, asks whether the lead is interested in selling land, captures a preferred callback number from interested leads, and logs confirmed interested leads to Google Sheets.
 
-The current implementation is a focused prototype: CSV in, Twilio calls out, speech gathered by Twilio, simple rules-based parsing, Google Sheets logging for interested leads, basic voicemail handling, and optional recurring campaign loops.
-It also includes a small web campaign console for uploading CSVs, starting/stopping a campaign, watching campaign activity, and viewing the recurring call list from a browser.
+The current implementation is a focused prototype: CSV in, Twilio calls out, speech gathered by Twilio, simple rules-based parsing, Google Sheets logging for interested leads, basic voicemail handling, optional scheduled starts, and optional recurring campaign loops.
+It also includes a small web campaign console for uploading CSVs, starting, scheduling, pausing, stopping, and cancelling campaigns, watching campaign activity, and viewing the recurring call list from a browser.
 
 ## What It Does
 
@@ -62,8 +62,8 @@ At a high level, the bot:
 | `src/server/cloudflared.js` | Starts and stops Cloudflare Tunnel with the server process. |
 | `src/server/routes/twilio.js` | Main call flow, Twilio webhooks, speech handling, voicemail handling, and final logging trigger. |
 | `src/server/routes/campaigns.js` | Campaign HTTP endpoints for the web UI and trusted path-based starts. |
-| `src/server/campaignManager.js` | In-memory web UI campaign state, upload tracking, activity log, and stop handling. |
-| `src/server/public/` | Static browser UI for upload/start/end/monitoring. |
+| `src/server/campaignManager.js` | In-memory web UI campaign state, upload tracking, scheduling, loop handling, activity log, pause/resume, and stop/cancel handling. |
+| `src/server/public/` | Static browser UI for upload/start/schedule/pause/end/monitoring. |
 | `src/server/voicePrompts.js` | All spoken prompt text. |
 | `src/server/services.js` | Wires Sheets and ElevenLabs services from config. |
 | `src/intent/interest.js` | Rules-based yes/no/unknown intent parser. |
@@ -91,10 +91,12 @@ Use it to:
 1. Upload a lead CSV from your computer.
    If the file is a DealMachine export, check `Deal Machine CSV` before upload.
 2. Start the uploaded CSV as a Twilio campaign.
-3. End a running campaign.
-4. Monitor upload/start/call-create/failure/stop activity.
-5. Check whether the Cloudflare Tunnel is disabled, starting, running, stopped, or errored.
-6. View the recurring call list, including each lead's current status, last call status, last parsed intent, loop round, and last Twilio Call SID.
+3. Schedule the uploaded CSV for a later date/time in a selected IANA time zone.
+4. Pause/resume a running campaign.
+5. End a running campaign or cancel a scheduled campaign before it starts.
+6. Monitor upload/start/schedule/call-create/failure/pause/stop activity.
+7. Check whether the Cloudflare Tunnel is disabled, starting, running, stopped, or errored.
+8. View the recurring call list, including each lead's current status, last call status, last parsed intent, loop round, and last Twilio Call SID.
 
 Campaigns can be started as one-shot runs or recurring loop runs. In loop mode,
 the manager keeps unresolved/no-answer leads in the campaign and calls them again
@@ -102,10 +104,16 @@ after the configured interval. Leads that clearly say no are marked declined and
 removed. Leads that confirm interest are logged to Google Sheets, marked logged,
 and removed.
 
+Campaigns can also be scheduled from the web console. The user chooses a local
+date/time and time zone; the server converts that wall-clock value to UTC and
+starts the same one-shot or loop campaign path when the timer fires. Scheduled
+state is in memory, so a Node process restart loses pending schedules.
+
 Recurring call list statuses include:
 
 ```text
 ready
+scheduled
 pending
 calling
 active
@@ -132,9 +140,10 @@ GET  /system/status
 POST /campaigns/ui/upload
 POST /campaigns/ui/start
 POST /campaigns/ui/end
+POST /campaigns/ui/pause
 ```
 
-The UI state is in memory. If the Node process restarts, the page loses the currently uploaded file selection, current campaign status, recurring call list state, and activity history.
+The UI state is in memory. If the Node process restarts, the page loses the currently uploaded file selection, current campaign status, scheduled campaign timer, recurring call list state, and activity history.
 
 ### 1. Start A Campaign
 
@@ -302,6 +311,11 @@ leads
 ```
 
 `shouldStop` lets the web UI stop queued leads before they are called. `onEvent` feeds the activity monitor and recurring call list with call creation, call creation failure, and skipped-lead events. `leads` lets the campaign manager dial a filtered set of still-pending leads during recurring loop rounds without reparsing or redialing the full CSV.
+
+Scheduling is handled one layer above `startCampaign`, in
+`src/server/campaignManager.js`. The manager records the campaign ID, loop
+settings, scheduled UTC start time, and selected time zone, then uses a one-shot
+timer to call the same immediate-start path when due.
 
 ## Twilio Webhook Flow
 
@@ -778,8 +792,9 @@ Important validation rules:
 | `GET` | `/` | Static web campaign console. |
 | `GET` | `/campaigns/ui/state` | Returns current web UI campaign state and activity. |
 | `POST` | `/campaigns/ui/upload` | Uploads a CSV file from the browser; when `dealMachineCsv=true`, converts a DealMachine export before parsing. |
-| `POST` | `/campaigns/ui/start` | Starts the uploaded CSV as a background campaign. |
-| `POST` | `/campaigns/ui/end` | Requests the running campaign to stop and attempts to end active calls. |
+| `POST` | `/campaigns/ui/start` | Starts the uploaded CSV as a background campaign, or schedules it when `scheduleStartAt` and `scheduleTimezone` are provided. |
+| `POST` | `/campaigns/ui/end` | Requests the running campaign to stop and attempts to end active calls, or cancels a scheduled campaign before it starts. |
+| `POST` | `/campaigns/ui/pause` | Toggles pause/resume for a running campaign. |
 | `POST` | `/campaigns/:id/start` | Starts a campaign from a JSON body containing `csvPath`. |
 
 ## Starting The Server
@@ -841,16 +856,19 @@ http://SERVER_IP:3000/
 3. Upload a CSV. Check `Deal Machine CSV` first when uploading a DealMachine export.
 4. Enter an optional campaign ID.
 5. Optionally check Run in loop and set the loop interval in hours.
-6. Click Start Campaign.
-7. Watch the Recurring Calls table for each lead's status.
-8. Watch the Activity section for call creation, logging, decline, retry, and stop events.
-9. Click End Campaign to stop queued leads and request active calls to hang up.
+6. Optionally check Schedule for later, choose the local start date/time, and choose the time zone.
+7. Click Start Campaign.
+8. Watch the Recurring Calls table for each lead's status.
+9. Watch the Activity section for scheduling, call creation, logging, decline, retry, pause, and stop events.
+10. Click Pause Campaign to pause queued dialing during a running campaign, then Resume Campaign to continue.
+11. Click End Campaign to cancel a scheduled campaign, or to stop queued leads and request active calls to hang up during a running campaign.
 
 Loop mode keeps running until stopped or until every lead is removed from the
 campaign. Leads are removed when they clearly decline or confirm interest.
 No-answer/unresolved leads stay pending and are retried after each interval.
 
 The End Campaign button is best-effort: it stops leads that have not started yet and calls Twilio to mark active calls as completed. Calls that already finished or cannot be updated by Twilio may still produce normal terminal callbacks.
+For scheduled campaigns, End Campaign cancels the in-memory timer before any calls are created.
 
 ### CLI
 
@@ -958,6 +976,7 @@ The web UI campaign manager also stores state in memory:
 - Uploaded CSV path and lead count
 - Current campaign status
 - Current campaign ID
+- Scheduled campaign timer, UTC start time, selected time zone, and launch options
 - Recent activity log
 - Active call SIDs created by the current campaign
 - Pending lead IDs for recurring loop campaigns
@@ -994,6 +1013,7 @@ Errors are written to `stderr`; other log levels are written to `stdout`.
 
 - Call state is in memory and not durable across restarts.
 - Web UI campaign state, recurring call list state, and activity history are also in memory and not durable across restarts.
+- Scheduled campaign timers are in memory and are not durable across restarts.
 - The web UI and campaign endpoints do not implement authentication yet. Put the app behind a trusted access layer before exposing it broadly.
 - The Sheets schema omits some useful audit fields from the original spec, including `lead_id`, `call_sid`, `answer_type`, and `retry_count`.
 - Intent parsing is regex-based and can misclassify nuanced responses.
@@ -1018,6 +1038,7 @@ Common changes and where to make them:
 | Change campaign CSV requirements | `src/campaigns/csvLeads.js` |
 | Change Twilio dialing options | `src/campaigns/startCampaign.js` |
 | Change campaign web UI behavior | `src/server/campaignManager.js`, `src/server/routes/campaigns.js`, and `src/server/public/` |
+| Change campaign scheduling behavior | `src/server/campaignManager.js`, `src/server/routes/campaigns.js`, and `src/server/public/` |
 | Change retry limit behavior | `src/config/index.js` and route logic in `src/server/routes/twilio.js` |
 | Change DealMachine upload mapping | `src/campaigns/dealMachineCsv.js` and `src/server/routes/campaigns.js` |
 | Change city/address normalization | `src/campaigns/leadCity.js` and `src/campaigns/leadAddress.js` |

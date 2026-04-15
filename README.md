@@ -14,7 +14,8 @@ for yes/no answers and spoken phone numbers, optional ElevenLabs-generated audio
 for natural voice prompts, and Google Sheets as the interested-lead log.
 
 It also includes a small browser campaign console. From the web UI, you can
-upload a CSV, start a campaign, optionally run the campaign in a recurring loop,
+upload a CSV, start a campaign immediately or schedule it for a chosen date,
+time, and time zone, optionally run the campaign in a recurring loop, pause or
 end a running campaign, monitor campaign activity, view each lead's campaign
 status, and check the Cloudflare Tunnel status.
 
@@ -84,10 +85,12 @@ http://SERVER_IP:3000/
 ```
 
 Use the page to upload a normal campaign CSV or a checked `Deal Machine CSV`,
-start a one-shot or looping campaign, end a running campaign, monitor activity,
-view the recurring call list with per-lead statuses, and check Cloudflare Tunnel
-status. If you are accessing it from another computer, make sure the server
-firewall allows the configured `PORT`.
+start a one-shot or looping campaign immediately, schedule a one-shot or looping
+campaign for later, pause/resume a running campaign, cancel a scheduled campaign,
+end a running campaign, monitor activity, view the recurring call list with
+per-lead statuses, and check Cloudflare Tunnel status. If you are accessing it
+from another computer, make sure the server firewall allows the configured
+`PORT`.
 
 In loop mode, no-answer/unresolved leads stay in the campaign and are called
 again after the configured interval. Leads that clearly say no are marked

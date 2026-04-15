@@ -1,3 +1,4 @@
+const fs = require("fs");
 const path = require("path");
 const { parseLeadsCsv } = require("../campaigns/csvLeads");
 const { createTwilioClient, startCampaign } = require("../campaigns/startCampaign");
@@ -5,6 +6,25 @@ const { createTwilioClient, startCampaign } = require("../campaigns/startCampaig
 const MAX_ACTIVITY_ITEMS = 300;
 const DEFAULT_LOOP_INTERVAL_HOURS = 24;
 const HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_RECURRING_EXPORT_DIR = path.resolve("campaign-inputs", "exports");
+const RECURRING_CSV_COLUMNS = [
+  "lead_id",
+  "lead_name",
+  "lead_phone",
+  "lead_address",
+  "lead_city",
+  "status",
+  "last_call_status",
+  "last_intent",
+  "call_sid",
+  "round",
+  "is_pending",
+  "is_active",
+  "completed_at",
+  "preferred_phone",
+  "call_transcript",
+  "updated_at"
+];
 
 function makeCampaignId() {
   return `campaign-${new Date().toISOString().replace(/[:.]/g, "-")}`;
@@ -14,6 +34,27 @@ function toPublicFile(filePath) {
   return {
     name: path.basename(filePath)
   };
+}
+
+function sanitizeExportName(value) {
+  return (
+    String(value || "recurring-calls")
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "recurring-calls"
+  );
+}
+
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function serializeRowsToCsv(rows) {
+  const lines = [
+    RECURRING_CSV_COLUMNS.join(","),
+    ...rows.map((row) => RECURRING_CSV_COLUMNS.map((column) => csvCell(row[column])).join(","))
+  ];
+  return `${lines.join("\n")}\n`;
 }
 
 class CampaignManager {
@@ -38,6 +79,7 @@ class CampaignManager {
     this.uploadedLeads = [];
     this.activeCalls = new Map();
     this.pendingLeadIds = new Set();
+    this.removedLeadIds = new Set();
     this.leadStatuses = new Map();
     this.activity = [];
     this.summary = null;
@@ -59,11 +101,12 @@ class CampaignManager {
     this.scheduledTimezone = null;
     this.scheduledCampaignId = null;
     this.scheduledOptions = null;
+    this.lastRecurringCsv = null;
   }
 
   log(level, message, meta = {}) {
     this.activity.unshift({
-      timestamp: new Date().toISOString(),
+      timestamp: this.now().toISOString(),
       level,
       message,
       meta
@@ -79,6 +122,8 @@ class CampaignManager {
     this.uploadedCsvPath = csvPath;
     this.uploadedLeadCount = leads.length;
     this.uploadedLeads = leads;
+    this.lastRecurringCsv = null;
+    this.removedLeadIds.clear();
     this.leadStatuses = new Map(
       leads.map((lead) => [
         lead.lead_id,
@@ -140,7 +185,7 @@ class CampaignManager {
     this.isPaused = false;
     this.clearPauseWait();
     this.activeCalls.clear();
-    this.pendingLeadIds = new Set(this.uploadedLeads.map((lead) => lead.lead_id));
+    this.pendingLeadIds = new Set(this.getCallableLeads().map((lead) => lead.lead_id));
     this.uploadedLeads.forEach((lead) => {
       this.setLeadStatus(lead.lead_id, {
         status: "scheduled",
@@ -217,7 +262,7 @@ class CampaignManager {
     this.isPaused = false;
     this.clearPauseWait();
     this.activeCalls.clear();
-    this.pendingLeadIds = new Set(this.uploadedLeads.map((lead) => lead.lead_id));
+    this.pendingLeadIds = new Set(this.getCallableLeads().map((lead) => lead.lead_id));
     this.uploadedLeads.forEach((lead) => {
       this.setLeadStatus(lead.lead_id, {
         status: "pending",
@@ -568,7 +613,10 @@ class CampaignManager {
         status: "logged",
         lastCallStatus: outcome.call_status,
         lastIntent: outcome.interest_intent,
-        callSid: outcome.call_sid
+        callSid: outcome.call_sid,
+        callTranscript: outcome.call_transcript || "",
+        preferredPhone: outcome.preferred_phone || "",
+        completedAt: outcome.timestamp_utc || ""
       });
       if (this.pendingLeadIds.size === 0) {
         this.clearLoopWait();
@@ -590,7 +638,10 @@ class CampaignManager {
         status: "declined",
         lastCallStatus: outcome.call_status,
         lastIntent: outcome.interest_intent,
-        callSid: outcome.call_sid
+        callSid: outcome.call_sid,
+        callTranscript: outcome.call_transcript || "",
+        preferredPhone: outcome.preferred_phone || "",
+        completedAt: outcome.timestamp_utc || ""
       });
       if (this.pendingLeadIds.size === 0) {
         this.clearLoopWait();
@@ -609,7 +660,10 @@ class CampaignManager {
         status: this.loopEnabled ? "waiting_next_loop" : "unresolved",
         lastCallStatus: outcome.call_status,
         lastIntent: outcome.interest_intent,
-        callSid: outcome.call_sid
+        callSid: outcome.call_sid,
+        callTranscript: outcome.call_transcript || "",
+        preferredPhone: outcome.preferred_phone || "",
+        completedAt: outcome.timestamp_utc || ""
       });
     }
 
@@ -634,24 +688,63 @@ class CampaignManager {
       lastCallStatus: existing.lastCallStatus || "",
       lastIntent: existing.lastIntent || "",
       callSid: existing.callSid || "",
+      callTranscript: existing.callTranscript || "",
+      preferredPhone: existing.preferredPhone || "",
+      completedAt: existing.completedAt || "",
       round: existing.round || 0,
       ...updates,
-      updatedAt: new Date().toISOString()
+      updatedAt: this.now().toISOString()
     });
   }
 
+  getCallableLeads() {
+    return this.uploadedLeads.filter((lead) => !this.removedLeadIds.has(lead.lead_id));
+  }
+
+  removeRecurringLead(leadId) {
+    const normalizedLeadId = String(leadId || "").trim();
+    const lead = this.uploadedLeads.find((candidate) => candidate.lead_id === normalizedLeadId);
+    if (!lead || this.removedLeadIds.has(normalizedLeadId)) {
+      throw new Error("Lead was not found in the recurring call list.");
+    }
+
+    this.removedLeadIds.add(normalizedLeadId);
+    this.pendingLeadIds.delete(normalizedLeadId);
+    this.setLeadStatus(normalizedLeadId, {
+      status: "removed",
+      lastCallStatus: "",
+      lastIntent: "",
+      callSid: ""
+    });
+    if (this.pendingLeadIds.size === 0) {
+      this.clearLoopWait();
+    }
+    this.log("warn", "Lead removed from recurring calls", {
+      campaignId: this.currentCampaignId,
+      leadId: normalizedLeadId,
+      leadName: lead.lead_name,
+      pendingLeadCount: this.pendingLeadIds.size
+    });
+
+    return this.getState();
+  }
+
   getRecurringCallList() {
-    return this.uploadedLeads.map((lead) => {
+    return this.getCallableLeads().map((lead) => {
       const status = this.leadStatuses.get(lead.lead_id) || {};
       return {
         leadId: lead.lead_id,
         leadName: lead.lead_name,
         leadPhone: lead.lead_phone,
         leadAddress: lead.lead_address || "",
+        leadCity: lead.lead_city || "",
         status: status.status || "ready",
         lastCallStatus: status.lastCallStatus || "",
         lastIntent: status.lastIntent || "",
         callSid: status.callSid || "",
+        callTranscript: status.callTranscript || "",
+        preferredPhone: status.preferredPhone || "",
+        completedAt: status.completedAt || "",
         round: status.round || 0,
         isPending: this.pendingLeadIds.has(lead.lead_id),
         isActive: Array.from(this.activeCalls.values()).some(
@@ -662,12 +755,57 @@ class CampaignManager {
     });
   }
 
+  saveRecurringCallListCsv(options = {}) {
+    const outputDir = options.outputDir || DEFAULT_RECURRING_EXPORT_DIR;
+    const createdAt = this.now().toISOString();
+    const timestamp = createdAt.replace(/[:.]/g, "-");
+    const campaignName = sanitizeExportName(this.currentCampaignId || "recurring-calls");
+    const filename = `${campaignName}-recurring-calls-${timestamp}.csv`;
+    const filePath = path.join(outputDir, filename);
+    const rows = this.getRecurringCallList().map((lead) => ({
+      lead_id: lead.leadId,
+      lead_name: lead.leadName,
+      lead_phone: lead.leadPhone,
+      lead_address: lead.leadAddress,
+      lead_city: lead.leadCity,
+      status: lead.status,
+      last_call_status: lead.lastCallStatus,
+      last_intent: lead.lastIntent,
+      call_sid: lead.callSid,
+      round: lead.round,
+      is_pending: lead.isPending,
+      is_active: lead.isActive,
+      completed_at: lead.completedAt,
+      preferred_phone: lead.preferredPhone,
+      call_transcript: lead.callTranscript,
+      updated_at: lead.updatedAt
+    }));
+
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(filePath, serializeRowsToCsv(rows), "utf8");
+
+    this.lastRecurringCsv = {
+      name: filename,
+      path: filePath,
+      count: rows.length,
+      createdAt
+    };
+    this.log("info", "Recurring call list saved", {
+      campaignId: this.currentCampaignId,
+      file: filename,
+      leadCount: rows.length
+    });
+
+    return this.lastRecurringCsv;
+  }
+
   getState() {
+    const visibleLeadCount = this.uploadedCsvPath ? this.getCallableLeads().length : this.uploadedLeadCount;
     return {
       status: this.status,
       campaignId: this.currentCampaignId,
       uploadedCsv: this.uploadedCsvPath ? toPublicFile(this.uploadedCsvPath) : null,
-      uploadedLeadCount: this.uploadedLeadCount,
+      uploadedLeadCount: visibleLeadCount,
       activeCallCount: this.activeCalls.size,
       pendingLeadCount: this.pendingLeadIds.size,
       stopRequested: this.stopRequested,
@@ -679,6 +817,7 @@ class CampaignManager {
       scheduledTimezone: this.scheduledTimezone,
       removedInterestedCount: this.removedInterestedCount,
       removedNotInterestedCount: this.removedNotInterestedCount,
+      lastRecurringCsv: this.lastRecurringCsv,
       recurringCallList: this.getRecurringCallList(),
       summary: this.summary,
       activity: this.activity

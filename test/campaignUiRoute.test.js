@@ -84,6 +84,26 @@ function makeManager(overrides = {}) {
       state.isPaused = !state.isPaused;
       return state;
     },
+    removeRecurringLead: (leadId) => {
+      calls.push({ method: "removeRecurringLead", leadId });
+      state.recurringCallList = state.recurringCallList.filter((lead) => lead.leadId !== leadId);
+      state.uploadedLeadCount = state.recurringCallList.length;
+      state.pendingLeadCount = state.recurringCallList.filter((lead) => lead.isPending).length;
+      return state;
+    },
+    saveRecurringCallListCsv: () => {
+      calls.push({ method: "saveRecurringCallListCsv" });
+      state.lastRecurringCsv = {
+        name: "loop-test-recurring-calls-2026-04-15T00-00-00-000Z.csv",
+        path: path.resolve(
+          "campaign-inputs",
+          "exports",
+          "loop-test-recurring-calls-2026-04-15T00-00-00-000Z.csv"
+        ),
+        count: state.recurringCallList.length
+      };
+      return state.lastRecurringCsv;
+    },
     ...overrides
   };
 }
@@ -126,6 +146,9 @@ test("campaign UI state route returns recurring call list", async (t) => {
           lastCallStatus: "",
           lastIntent: "",
           callSid: "CA-active",
+          callTranscript: "",
+          preferredPhone: "",
+          completedAt: "",
           round: 1,
           isPending: true,
           isActive: true,
@@ -139,6 +162,9 @@ test("campaign UI state route returns recurring call list", async (t) => {
           lastCallStatus: "no-answer",
           lastIntent: "unknown",
           callSid: "CA-missed",
+          callTranscript: "Intent: no answer",
+          preferredPhone: "",
+          completedAt: "2026-04-15T00:01:00.000Z",
           round: 1,
           isPending: true,
           isActive: false,
@@ -159,6 +185,101 @@ test("campaign UI state route returns recurring call list", async (t) => {
   assert.equal(payload.recurringCallList[0].callSid, "CA-active");
   assert.equal(payload.recurringCallList[1].status, "waiting_next_loop");
   assert.equal(payload.recurringCallList[1].lastCallStatus, "no-answer");
+  assert.equal(payload.recurringCallList[1].callTranscript, "Intent: no answer");
+  assert.equal(payload.recurringCallList[1].completedAt, "2026-04-15T00:01:00.000Z");
+});
+
+test("campaign UI remove recurring lead route delegates to manager", async (t) => {
+  const manager = makeManager({
+    getState: undefined
+  });
+  manager.getState = () => ({
+    status: "running",
+    campaignId: "loop-test",
+    uploadedCsv: { name: "leads.csv" },
+    uploadedLeadCount: 1,
+    activeCallCount: 0,
+    pendingLeadCount: 1,
+    stopRequested: false,
+    summary: null,
+    activity: [],
+    recurringCallList: [
+      {
+        leadId: "lead-1",
+        leadName: "Ada Lovelace",
+        leadPhone: "+15550000001",
+        status: "waiting_next_loop",
+        isPending: true,
+        isActive: false
+      }
+    ]
+  });
+  const baseUrl = await withServer(t, manager);
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/recurring-leads/lead-1/remove`, {
+    method: "POST"
+  });
+  const payload = await readJson(response);
+
+  assert.equal(response.status, 202);
+  assert.equal(manager.calls.at(-1).method, "removeRecurringLead");
+  assert.equal(manager.calls.at(-1).leadId, "lead-1");
+  assert.equal(payload.uploadedLeadCount, 0);
+  assert.equal(payload.pendingLeadCount, 0);
+  assert.deepEqual(payload.recurringCallList, []);
+});
+
+test("campaign UI save recurring CSV route delegates to manager", async (t) => {
+  let lastRecurringCsv = null;
+  const manager = makeManager({
+    saveRecurringCallListCsv: () => {
+      manager.calls.push({ method: "saveRecurringCallListCsv" });
+      lastRecurringCsv = {
+        name: "loop-test-recurring-calls-2026-04-15T00-00-00-000Z.csv",
+        path: path.resolve(
+          "campaign-inputs",
+          "exports",
+          "loop-test-recurring-calls-2026-04-15T00-00-00-000Z.csv"
+        ),
+        count: 1
+      };
+      return lastRecurringCsv;
+    }
+  });
+  manager.getState = () => ({
+    status: "running",
+    campaignId: "loop-test",
+    uploadedCsv: { name: "leads.csv" },
+    uploadedLeadCount: 1,
+    activeCallCount: 0,
+    pendingLeadCount: 1,
+    stopRequested: false,
+    summary: null,
+    lastRecurringCsv,
+    activity: [],
+    recurringCallList: [
+      {
+        leadId: "lead-1",
+        leadName: "Ada Lovelace",
+        leadPhone: "+15550000001",
+        status: "waiting_next_loop",
+        isPending: true,
+        isActive: false
+      }
+    ]
+  });
+  const baseUrl = await withServer(t, manager);
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/recurring-leads/save-csv`, {
+    method: "POST"
+  });
+  const payload = await readJson(response);
+
+  assert.equal(response.status, 201);
+  assert.equal(manager.calls.at(-1).method, "saveRecurringCallListCsv");
+  assert.equal(payload.savedCsv.name, "loop-test-recurring-calls-2026-04-15T00-00-00-000Z.csv");
+  assert.equal(payload.savedCsv.count, 1);
+  assert.equal(payload.state.lastRecurringCsv.name, payload.savedCsv.name);
 });
 
 test("campaign UI upload accepts CSV files and passes saved path to manager", async (t) => {

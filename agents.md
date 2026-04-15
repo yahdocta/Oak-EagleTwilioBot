@@ -73,8 +73,8 @@ If the user asks about how calls start:
 If the user asks about the web UI:
 
 - Read `src/server/public/index.html`, `src/server/public/app.js`, and `src/server/public/styles.css`.
-- Read `src/server/routes/campaigns.js` for upload/start/end/state HTTP routes.
-- Read `src/server/campaignManager.js` for background campaign state, loop behavior, recurring call list statuses, activity, and stop behavior.
+- Read `src/server/routes/campaigns.js` for upload/start/end/pause/state HTTP routes.
+- Read `src/server/campaignManager.js` for background campaign state, scheduled starts, loop behavior, recurring call list statuses, activity, pause/resume, stop, and scheduled-campaign cancellation behavior.
 - Read `src/server/cloudflared.js` and `/system/status` handling in `src/server/app.js` for the tunnel status metric.
 
 If the user asks about the live phone conversation:
@@ -98,7 +98,7 @@ If the user asks about database/logging:
 - Read `src/integrations/sheets/adapter.js`.
 - Read `src/integrations/sheets/schema.js`.
 - The app writes confirmed interested leads only.
-- The current sheet schema writes `call_transcript` as column `G`.
+- The current sheet schema writes `call_transcript` as column `H`.
 - The implemented sheet schema is still narrower than the original archived spec.
 
 If the user asks about ElevenLabs voices:
@@ -119,11 +119,12 @@ If the user asks about deployment:
 - `npm start` runs the Express server.
 - `npm start` also starts Cloudflare Tunnel by default when `CLOUDFLARED_AUTO_START=true`.
 - `GET /` serves the campaign console.
+- The campaign console can start campaigns immediately or schedule one-shot/loop campaigns for a selected date/time and time zone.
 - `npm run check` validates config by loading `src/config`.
 - `npm test` runs the Node test suite.
 - Twilio needs a public HTTPS `PUBLIC_BASE_URL`; localhost will not work for live calls.
 - Active call state is stored in memory in `src/server/routes/twilio.js`, so restarts during calls can lose temporary state before final status logging.
-- Web UI campaign state is stored in memory in `src/server/campaignManager.js`, so restarts lose the console's current upload, recurring call list, activity, and run state.
+- Web UI campaign state is stored in memory in `src/server/campaignManager.js`, so restarts lose the console's current upload, scheduled campaign timer, recurring call list, activity, and run state.
 
 ## Editing Guidelines
 

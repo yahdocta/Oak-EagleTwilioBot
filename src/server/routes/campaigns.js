@@ -110,6 +110,25 @@ function createCampaignRouter(options = {}) {
   );
 
   router.post(
+    "/ui/recurring-leads/:leadId/remove",
+    withErrorHandling(async (req, res) => {
+      const state = manager.removeRecurringLead(req.params.leadId);
+      return res.status(202).json(state);
+    })
+  );
+
+  router.post(
+    "/ui/recurring-leads/save-csv",
+    withErrorHandling(async (req, res) => {
+      const savedCsv = manager.saveRecurringCallListCsv();
+      return res.status(201).json({
+        savedCsv,
+        state: manager.getState()
+      });
+    })
+  );
+
+  router.post(
     "/:id/start",
     withErrorHandling(async (req, res) => {
       const campaignId = req.params.id;
@@ -144,7 +163,8 @@ function createCampaignRouter(options = {}) {
       error.message === "Schedule time must be in the future." ||
       error.message === "Schedule time must use YYYY-MM-DDTHH:mm format." ||
       error.message === "Schedule time must be a valid calendar date and time." ||
-      error.message === "Schedule time is not valid in the selected time zone."
+      error.message === "Schedule time is not valid in the selected time zone." ||
+      error.message === "Lead was not found in the recurring call list."
     ) {
       return res.status(409).json({ error: error.message });
     }

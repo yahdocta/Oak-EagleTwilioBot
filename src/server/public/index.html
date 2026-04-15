@@ -106,9 +106,18 @@
       <section class="recurring-panel">
         <div class="activity-header">
           <h2>Recurring Calls</h2>
-          <span id="recurringSummary" class="muted">No leads uploaded.</span>
+          <div class="recurring-controls">
+            <label for="recurringSort">Sort</label>
+            <select id="recurringSort">
+              <option value="default">Default</option>
+              <option value="time_desc">Time newest first</option>
+              <option value="intent">Intent</option>
+            </select>
+            <button id="saveRecurringCsvButton" type="button" class="secondary">Save CSV</button>
+            <span id="recurringSummary" class="muted">No leads uploaded.</span>
+          </div>
         </div>
-        <div class="lead-table-wrap">
+        <div id="recurringTableWrap" class="lead-table-wrap">
           <table class="lead-table">
             <thead>
               <tr>
@@ -120,11 +129,21 @@
                 <th>Intent</th>
                 <th>Round</th>
                 <th>Call SID</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="recurringLeadList"></tbody>
           </table>
         </div>
+        <button
+          id="recurringResizeHandle"
+          class="resize-handle"
+          type="button"
+          aria-label="Resize recurring calls list"
+          aria-valuemin="220"
+          aria-valuemax="760"
+          aria-valuenow="360"
+        ></button>
       </section>
 
       <section class="activity-panel">
@@ -135,6 +154,17 @@
         <ol id="activityLog" class="activity-log"></ol>
       </section>
     </main>
+
+    <dialog id="leadDetailDialog" class="lead-detail">
+      <form method="dialog">
+        <div class="activity-header">
+          <h2 id="leadDetailTitle">Call Transcript</h2>
+          <button type="submit" class="secondary">Close</button>
+        </div>
+        <dl id="leadDetailMeta" class="lead-detail-meta"></dl>
+        <pre id="leadDetailTranscript"></pre>
+      </form>
+    </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js"></script>
