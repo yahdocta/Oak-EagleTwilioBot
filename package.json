@@ -7,7 +7,8 @@
     "start": "node src/server/app.js",
     "dev": "nodemon src/server/app.js",
     "check": "node -e \"require('./src/config').config; console.log('config-ok');\"",
-    "run-campaign": "node src/cli/runCampaign.js"
+    "run-campaign": "node src/cli/runCampaign.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20"
@@ -17,6 +18,7 @@
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
     "googleapis": "^144.0.0",
+    "multer": "^2.1.1",
     "p-limit": "^6.2.0",
     "twilio": "^5.5.3"
   },

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oak &amp; Eagle Campaign Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Oak &amp; Eagle</p>
+          <h1>Call Campaign Console</h1>
+        </div>
+        <img
+          class="brand-image"
+          src="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=160&q=80"
+          alt="Laptop with campaign work open"
+        />
+      </header>
+
+      <section class="status-strip" aria-live="polite">
+        <div class="metric">
+          <span>Status</span>
+          <strong id="statusValue">Loading</strong>
+        </div>
+        <div class="metric">
+          <span>Uploaded leads</span>
+          <strong id="leadCount">0</strong>
+        </div>
+        <div class="metric">
+          <span>Active calls</span>
+          <strong id="activeCalls">0</strong>
+        </div>
+        <div class="metric">
+          <span>Campaign</span>
+          <strong id="campaignId">None</strong>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <form id="uploadForm" class="panel">
+          <h2>Upload CSV</h2>
+          <p>Use columns lead_id, lead_phone, and either lead_name or first_name plus last_name.</p>
+          <label class="file-picker">
+            <input id="csvInput" type="file" name="csv" accept=".csv,text/csv" required />
+            <span id="fileName">Choose a CSV file</span>
+          </label>
+          <button type="submit">Upload CSV</button>
+          <p id="uploadedFile" class="muted">No CSV uploaded yet.</p>
+        </form>
+
+        <form id="controlForm" class="panel">
+          <h2>Campaign Controls</h2>
+          <label for="campaignInput">Campaign ID</label>
+          <input id="campaignInput" name="campaignId" type="text" placeholder="spring-test" />
+          <div class="button-row">
+            <button id="startButton" type="submit">Start Campaign</button>
+            <button id="endButton" class="danger" type="button">End Campaign</button>
+          </div>
+          <p id="summaryText" class="muted">Upload a CSV, then start a campaign.</p>
+        </form>
+      </section>
+
+      <section class="activity-panel">
+        <div class="activity-header">
+          <h2>Activity</h2>
+          <button id="refreshButton" type="button" class="secondary">Refresh</button>
+        </div>
+        <ol id="activityLog" class="activity-log"></ol>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

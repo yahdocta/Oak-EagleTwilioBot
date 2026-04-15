@@ -1,6 +1,6 @@
 # Oak & Eagle Twilio Bot: Server + Public URL Setup Guide
 
-This guide starts from an unconfigured server and gets you to a working public webhook URL for Twilio.
+This guide starts from an unconfigured server and gets you to a working public webhook URL for Twilio plus a browser-accessible campaign console.
 
 ## 1. What this project needs
 
@@ -8,6 +8,7 @@ Your app must be reachable over HTTPS on:
 
 - `https://<your-domain>/twilio/voice/outbound`
 - `https://<your-domain>/twilio/voice/status`
+- `https://<your-domain>/`
 
 Twilio cannot call `localhost`, so you need a public URL. The intended setup in your spec is:
 
@@ -88,7 +89,14 @@ npm run check
 npm start
 ```
 
-App should answer `GET /healthz` on `http://localhost:3000/healthz`.
+App should answer:
+
+```text
+http://localhost:3000/healthz
+http://localhost:3000/
+```
+
+The `/` route is the campaign console for uploading CSVs, starting/ending campaigns, and watching activity.
 
 ### Path B: Docker runtime (recommended)
 
@@ -139,6 +147,9 @@ cloudflared tunnel run oak-eagle-bot
 7. Validate:
 
 - `https://calls.yourdomain.com/healthz` should return `{ "ok": true }`
+- `https://calls.yourdomain.com/` should load the campaign console
+
+If you expose the root console on the public internet, put the tunnel hostname behind an access control layer such as Cloudflare Access, a VPN, or a reverse proxy with authentication. The UI can start real outbound calls.
 
 ## 6. Finalize Twilio settings
 
@@ -153,13 +164,17 @@ In Twilio Console for your phone number (Voice webhook):
 
 1. Start app.
 2. Start cloudflared tunnel.
-3. Trigger campaign endpoint with a tiny CSV (1-2 leads).
-4. Confirm rows are appended to your Google Sheet.
+3. Open `https://calls.yourdomain.com/`.
+4. Upload a tiny CSV with 1-2 leads.
+5. Start the campaign from the page.
+6. Watch the Activity section.
+7. Confirm rows are appended to your Google Sheet after calls finish.
 
 ## 8. Troubleshooting quick list
 
 - `config-ok` fails: check `.env` required keys and file paths.
 - Twilio 11200 webhook error: URL not publicly reachable or TLS/DNS issue.
+- Web UI works locally but not from your computer: check firewall rules, tunnel/proxy config, and the configured `PORT`.
 - No rows in sheet: verify service account has editor access to the sheet tab.
 - 500 on webhook: inspect server logs for parsing/sheets errors.
 
@@ -172,6 +187,8 @@ Project: Oak-EagleTwilioBot (Node/Express Twilio outbound bot).
 Current status:
 - Twilio routes implemented: /twilio/voice/outbound, /twilio/voice/intent, /twilio/voice/contact, /twilio/voice/status
 - Campaign runner implemented: POST /campaigns/:id/start
+- Web campaign console implemented at GET /
+- Web campaign endpoints implemented under /campaigns/ui/*
 - Intent parsing + Sheets adapter implemented
 - service-account.json exists locally
 - I do NOT have server deployment/public URL configured yet

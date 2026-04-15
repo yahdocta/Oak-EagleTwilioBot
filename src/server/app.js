@@ -1,8 +1,10 @@
 const express = require("express");
+const path = require("path");
 const { config } = require("../config");
 const { logger } = require("../utils/logger");
 const { createTwilioRouter } = require("./routes/twilio");
 const { createCampaignRouter } = require("./routes/campaigns");
+const { CampaignManager } = require("./campaignManager");
 const { sheetsAdapter, elevenLabsTts } = require("./services");
 const { buildVoicePrompts } = require("./voicePrompts");
 
@@ -25,23 +27,25 @@ function mountTwilioRoutes(app, promptAudioUrls) {
   app.use("/twilio", createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }));
 }
 
-function mountCampaignRoutes(app) {
-  app.use("/campaigns", createCampaignRouter());
+function mountCampaignRoutes(app, campaignManager) {
+  app.use("/campaigns", createCampaignRouter({ manager: campaignManager }));
 }
 
 function createApp(promptAudioUrls) {
   const app = express();
+  const campaignManager = new CampaignManager({ config });
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
   app.use(requestLoggerMiddleware);
+  app.use(express.static(path.join(__dirname, "public")));
 
   app.get("/healthz", (req, res) => {
     res.status(200).json({ ok: true });
   });
 
   mountTwilioRoutes(app, promptAudioUrls);
-  mountCampaignRoutes(app);
+  mountCampaignRoutes(app, campaignManager);
 
   app.use((error, req, res, next) => {
     logger.error("request.failed", {

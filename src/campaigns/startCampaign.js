@@ -29,14 +29,32 @@ function appendQueryToUrl(urlString, query) {
 }
 
 async function startCampaign(csvPath, options) {
-  const { config, campaignId, twilioClient = createTwilioClient(config) } = options;
+  const {
+    config,
+    campaignId,
+    twilioClient = createTwilioClient(config),
+    shouldStop = () => false,
+    onEvent = () => {}
+  } = options;
   const limit = pLimit(config.batch.maxConcurrency);
   const leads = parseLeadsCsv(csvPath);
 
   const results = await Promise.all(
-    leads.map((lead) =>
+    leads.map((lead, index) =>
       limit(async () => {
+        if (shouldStop()) {
+          const result = {
+            ok: false,
+            skipped: true,
+            lead,
+            error: "Campaign stopped before this lead was called."
+          };
+          await onEvent("campaign.lead_skipped", { campaignId, lead, index });
+          return result;
+        }
+
         try {
+          await onEvent("campaign.call_creating", { campaignId, lead, index });
           const callbackQuery = {
             lead_id: lead.lead_id,
             lead_name: lead.lead_name,
@@ -59,12 +77,24 @@ async function startCampaign(csvPath, options) {
             asyncAmdStatusCallbackMethod: "POST"
           });
 
+          await onEvent("campaign.call_created", {
+            campaignId,
+            lead,
+            index,
+            callSid: call.sid
+          });
           return { ok: true, lead, callSid: call.sid };
         } catch (error) {
           logger.error("campaign.call_create_failed", {
             campaignId,
             leadId: lead.lead_id,
             message: error.message
+          });
+          await onEvent("campaign.call_create_failed", {
+            campaignId,
+            lead,
+            index,
+            error: error.message
           });
           return { ok: false, lead, error: error.message };
         }
@@ -73,15 +103,22 @@ async function startCampaign(csvPath, options) {
   );
 
   const successCount = results.filter((result) => result.ok).length;
-  const failureCount = results.length - successCount;
+  const skippedCount = results.filter((result) => result.skipped).length;
+  const failureCount = results.length - successCount - skippedCount;
 
-  return {
+  const summary = {
     campaignId,
     totalLeads: leads.length,
     successCount,
     failureCount,
     results
   };
+
+  if (skippedCount > 0) {
+    summary.skippedCount = skippedCount;
+  }
+
+  return summary;
 }
 
 module.exports = {
