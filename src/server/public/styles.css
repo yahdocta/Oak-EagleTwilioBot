@@ -123,7 +123,7 @@ h2 {
 
 .status-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin: 18px 0;
 }
@@ -153,6 +153,32 @@ h2 {
   display: block;
   overflow-wrap: anywhere;
   font-size: 1.25rem;
+}
+
+.metric small {
+  display: block;
+  max-height: 2.8rem;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+#tunnelStatus[data-status="running"] {
+  color: var(--green);
+}
+
+#tunnelStatus[data-status="starting"],
+#tunnelStatus[data-status="stopping"] {
+  color: #8a650e;
+}
+
+#tunnelStatus[data-status="exited"],
+#tunnelStatus[data-status="error"],
+#tunnelStatus[data-status="missing_config"] {
+  color: var(--coral);
 }
 
 .workspace {

@@ -51,6 +51,12 @@ TWILIO_VOICEMAIL_TEXT=Hi this is Kevin calling from Oak and Eagle...
 BATCH_MAX_CONCURRENCY=20
 INTENT_MAX_RETRIES=2
 
+# npm start launches Cloudflare Tunnel by default.
+CLOUDFLARED_AUTO_START=true
+CLOUDFLARED_COMMAND=cloudflared
+CLOUDFLARED_CONFIG=~/.cloudflared/config.yml
+CLOUDFLARED_TUNNEL=
+
 # Fill these after tunnel/domain is live:
 PUBLIC_BASE_URL=https://calls.yourdomain.com/
 TWILIO_STATUS_CALLBACK_URL=https://calls.yourdomain.com/twilio/voice/status
@@ -96,7 +102,19 @@ http://localhost:3000/healthz
 http://localhost:3000/
 ```
 
-The `/` route is the campaign console for uploading CSVs, starting/ending campaigns, and watching activity.
+The `/` route is the campaign console for uploading CSVs, starting/ending campaigns, watching activity, and checking Cloudflare Tunnel status.
+
+By default, `npm start` also launches:
+
+```bash
+cloudflared tunnel --config ~/.cloudflared/config.yml run
+```
+
+To run the tunnel yourself instead, set:
+
+```env
+CLOUDFLARED_AUTO_START=false
+```
 
 ### Path B: Docker runtime (recommended)
 
@@ -138,7 +156,13 @@ ingress:
   - service: http_status:404
 ```
 
-6. Run tunnel:
+6. Start the app, which also starts the tunnel by default:
+
+```bash
+npm start
+```
+
+Or run the tunnel manually if `CLOUDFLARED_AUTO_START=false`:
 
 ```bash
 cloudflared tunnel run oak-eagle-bot
@@ -163,12 +187,13 @@ In Twilio Console for your phone number (Voice webhook):
 ## 7. Run first end-to-end test
 
 1. Start app.
-2. Start cloudflared tunnel.
+2. Confirm startup logs include `cloudflared.starting`.
 3. Open `https://calls.yourdomain.com/`.
 4. Upload a tiny CSV with 1-2 leads.
 5. Start the campaign from the page.
 6. Watch the Activity section.
-7. Confirm rows are appended to your Google Sheet after calls finish.
+7. Confirm the Cloudflare Tunnel metric says `Running`.
+8. Confirm rows are appended to your Google Sheet after calls finish.
 
 ## 8. Troubleshooting quick list
 
@@ -189,13 +214,14 @@ Current status:
 - Campaign runner implemented: POST /campaigns/:id/start
 - Web campaign console implemented at GET /
 - Web campaign endpoints implemented under /campaigns/ui/*
+- Cloudflare Tunnel auto-start implemented through npm start when CLOUDFLARED_AUTO_START=true
+- Cloudflare Tunnel status is exposed at GET /system/status and shown in the web console
 - Intent parsing + Sheets adapter implemented
 - service-account.json exists locally
-- I do NOT have server deployment/public URL configured yet
 
 Need help with:
-1) Ubuntu deployment steps
-2) Cloudflare Tunnel setup for calls.yourdomain.com
+1) Validating Ubuntu deployment and startup logs
+2) Validating Cloudflare Tunnel health for calls.yourdomain.com
 3) Twilio webhook wiring and validation calls
 4) Optional Docker + Portainer productionization
 

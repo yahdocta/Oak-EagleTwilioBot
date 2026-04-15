@@ -43,6 +43,22 @@ function parseUrl(rawValue, key) {
   return parsedUrl;
 }
 
+function parseBoolean(rawValue, defaultValue) {
+  if (rawValue === undefined || rawValue === null || String(rawValue).trim() === "") {
+    return defaultValue;
+  }
+
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error(`Expected a boolean value. Received "${rawValue}".`);
+}
+
 function validateEnv(rawEnv) {
   const missingKeys = REQUIRED_ENV_KEYS.filter((key) => !rawEnv[key] || !String(rawEnv[key]).trim());
   if (missingKeys.length > 0) {
@@ -118,6 +134,12 @@ function loadConfig(rawEnv = process.env) {
       spreadsheetId: rawEnv.SHEETS_SPREADSHEET_ID,
       sheetName: rawEnv.SHEETS_SHEET_NAME,
       serviceAccountJsonPath: serviceAccountPath
+    },
+    cloudflare: {
+      autoStart: parseBoolean(rawEnv.CLOUDFLARED_AUTO_START, true),
+      command: rawEnv.CLOUDFLARED_COMMAND || "cloudflared",
+      configPath: rawEnv.CLOUDFLARED_CONFIG || "~/.cloudflared/config.yml",
+      tunnel: rawEnv.CLOUDFLARED_TUNNEL || ""
     }
   };
 }

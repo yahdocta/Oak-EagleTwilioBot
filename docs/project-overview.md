@@ -45,6 +45,7 @@ At a high level, the bot:
 | `src/campaigns/csvLeads.js` | Parses and validates lead CSV files. |
 | `src/campaigns/startCampaign.js` | Creates outbound Twilio calls from parsed leads. |
 | `src/server/app.js` | Express app entrypoint and route mounting. |
+| `src/server/cloudflared.js` | Starts and stops Cloudflare Tunnel with the server process. |
 | `src/server/routes/twilio.js` | Main call flow, Twilio webhooks, speech handling, voicemail handling, and final logging trigger. |
 | `src/server/routes/campaigns.js` | Campaign HTTP endpoints for the web UI and trusted path-based starts. |
 | `src/server/campaignManager.js` | In-memory web UI campaign state, upload tracking, activity log, and stop handling. |
@@ -77,6 +78,7 @@ Use it to:
 2. Start the uploaded CSV as a Twilio campaign.
 3. End a running campaign.
 4. Monitor upload/start/call-create/failure/stop activity.
+5. Check whether the Cloudflare Tunnel is disabled, starting, running, stopped, or errored.
 
 Uploaded CSV files are stored under:
 
@@ -88,6 +90,7 @@ The web console talks to these endpoints:
 
 ```text
 GET  /campaigns/ui/state
+GET  /system/status
 POST /campaigns/ui/upload
 POST /campaigns/ui/start
 POST /campaigns/ui/end
@@ -573,6 +576,33 @@ ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
 ELEVENLABS_CACHE_DIR=.cache/elevenlabs
 ```
 
+Optional Cloudflare Tunnel startup settings:
+
+```env
+CLOUDFLARED_AUTO_START=true
+CLOUDFLARED_COMMAND=cloudflared
+CLOUDFLARED_CONFIG=~/.cloudflared/config.yml
+CLOUDFLARED_TUNNEL=
+```
+
+When `CLOUDFLARED_AUTO_START=true`, `npm start` launches Cloudflare Tunnel after Express begins listening. Set `CLOUDFLARED_TUNNEL` only if your config needs an explicit tunnel name or ID after `cloudflared tunnel run`.
+
+The web console reads tunnel state from `GET /system/status`. Possible tunnel statuses are:
+
+```text
+disabled
+not_started
+starting
+running
+stopping
+stopped
+missing_config
+error
+exited
+```
+
+The UI shows this as the Cloudflare Tunnel metric in the top status strip, with details such as the process PID, last message, or last error.
+
 Important validation rules:
 
 - `PUBLIC_BASE_URL` must be a valid `http` or `https` URL.
@@ -586,6 +616,7 @@ Important validation rules:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/healthz` | Health check. Returns `{ "ok": true }`. |
+| `GET` | `/system/status` | Returns Cloudflare Tunnel process status for the web console. |
 | `POST` | `/twilio/voice/outbound` | Initial Twilio voice webhook for outbound calls. |
 | `POST` | `/twilio/voice/intent` | Handles yes/no speech result. |
 | `POST` | `/twilio/voice/contact` | Handles preferred phone speech result. |
@@ -617,6 +648,12 @@ Start the server:
 
 ```bash
 npm start
+```
+
+By default, startup also launches:
+
+```bash
+cloudflared tunnel --config ~/.cloudflared/config.yml run
 ```
 
 Development mode:
@@ -843,6 +880,14 @@ If Twilio cannot reach the app:
 2. Open `/healthz` from outside the machine.
 3. Confirm Cloudflare Tunnel or public hosting is running.
 4. Check Twilio debugger for webhook errors.
+
+If Cloudflare returns `530` or `error code: 1033`:
+
+1. Confirm `npm start` is still running.
+2. Check startup logs for `cloudflared.starting`.
+3. Check the configured `CLOUDFLARED_CONFIG` path.
+4. Run `curl https://your-domain/healthz` from outside the server.
+5. Check the Cloudflare Tunnel metric in the web console.
 
 If audio does not play:
 

@@ -1,4 +1,5 @@
 const stateUrl = "/campaigns/ui/state";
+const systemStatusUrl = "/system/status";
 const uploadUrl = "/campaigns/ui/upload";
 const startUrl = "/campaigns/ui/start";
 const endUrl = "/campaigns/ui/end";
@@ -13,6 +14,8 @@ const elements = {
   leadCount: document.querySelector("#leadCount"),
   activeCalls: document.querySelector("#activeCalls"),
   campaignId: document.querySelector("#campaignId"),
+  tunnelStatus: document.querySelector("#tunnelStatus"),
+  tunnelDetail: document.querySelector("#tunnelDetail"),
   campaignInput: document.querySelector("#campaignInput"),
   startButton: document.querySelector("#startButton"),
   endButton: document.querySelector("#endButton"),
@@ -35,6 +38,12 @@ function showToast(message) {
 
 function formatStatus(status) {
   return status ? status[0].toUpperCase() + status.slice(1) : "Unknown";
+}
+
+function formatTunnelStatus(status) {
+  return String(status || "unknown")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatTime(timestamp) {
@@ -145,11 +154,46 @@ function renderState(state) {
   renderActivity(state.activity);
 }
 
+function renderTunnelStatus(systemStatus) {
+  const tunnel = systemStatus.cloudflareTunnel || {};
+  const status = tunnel.status || "unknown";
+  elements.tunnelStatus.textContent = formatTunnelStatus(status);
+  elements.tunnelStatus.dataset.status = status;
+
+  if (tunnel.status === "running" && tunnel.pid) {
+    elements.tunnelDetail.textContent = `PID ${tunnel.pid}`;
+    return;
+  }
+
+  if (tunnel.lastError) {
+    elements.tunnelDetail.textContent = tunnel.lastError;
+    return;
+  }
+
+  if (tunnel.lastMessage) {
+    elements.tunnelDetail.textContent = tunnel.lastMessage;
+    return;
+  }
+
+  elements.tunnelDetail.textContent = tunnel.enabled ? "Waiting for tunnel..." : "Auto-start disabled";
+}
+
 async function refreshState() {
   const response = await fetch(stateUrl);
   const state = await readJson(response);
   renderState(state);
   return state;
+}
+
+async function refreshSystemStatus() {
+  const response = await fetch(systemStatusUrl);
+  const systemStatus = await readJson(response);
+  renderTunnelStatus(systemStatus);
+  return systemStatus;
+}
+
+async function refreshDashboard() {
+  await Promise.all([refreshState(), refreshSystemStatus()]);
 }
 
 elements.csvInput.addEventListener("change", () => {
@@ -205,10 +249,10 @@ elements.endButton.addEventListener("click", async () => {
 });
 
 elements.refreshButton.addEventListener("click", () => {
-  refreshState().catch((error) => showToast(error.message));
+  refreshDashboard().catch((error) => showToast(error.message));
 });
 
-refreshState().catch((error) => showToast(error.message));
+refreshDashboard().catch((error) => showToast(error.message));
 setInterval(() => {
-  refreshState().catch(() => {});
+  refreshDashboard().catch(() => {});
 }, 2500);

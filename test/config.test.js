@@ -55,6 +55,12 @@ test("loadConfig returns normalized config for valid env", () => {
   assert.equal(config.urls.statusCallback, "https://hooks.example.test/twilio/status");
   assert.equal(config.batch.maxConcurrency, 3);
   assert.equal(config.batch.intentMaxRetries, 2);
+  assert.deepEqual(config.cloudflare, {
+    autoStart: true,
+    command: "cloudflared",
+    configPath: "~/.cloudflared/config.yml",
+    tunnel: ""
+  });
 });
 
 test("loadConfig rejects missing required values", () => {
@@ -92,4 +98,22 @@ test("loadConfig rejects invalid numeric and project-phase values", () => {
     () => loadConfig(baseEnv({ INTENT_MAX_RETRIES: "3" })),
     /INTENT_MAX_RETRIES must be set to 2/
   );
+});
+
+test("loadConfig supports Cloudflare tunnel startup overrides", () => {
+  const config = loadConfig(
+    baseEnv({
+      CLOUDFLARED_AUTO_START: "false",
+      CLOUDFLARED_COMMAND: "/usr/local/bin/cloudflared",
+      CLOUDFLARED_CONFIG: "/etc/cloudflared/config.yml",
+      CLOUDFLARED_TUNNEL: "oak-eagle-bot"
+    })
+  );
+
+  assert.deepEqual(config.cloudflare, {
+    autoStart: false,
+    command: "/usr/local/bin/cloudflared",
+    configPath: "/etc/cloudflared/config.yml",
+    tunnel: "oak-eagle-bot"
+  });
 });

@@ -23,10 +23,12 @@ Start the server:
 npm start
 ```
 
+The server also starts the configured Cloudflare Tunnel by default, using `~/.cloudflared/config.yml`.
+
 Open the campaign console:
 
 ```text
 http://SERVER_IP:3000/
 ```
 
-Use the page to upload a CSV, start a campaign, end a running campaign, and monitor activity. If you are accessing it from another computer, make sure the server firewall allows the configured `PORT`.
+Use the page to upload a CSV, start a campaign, end a running campaign, monitor activity, and check Cloudflare Tunnel status. If you are accessing it from another computer, make sure the server firewall allows the configured `PORT`.

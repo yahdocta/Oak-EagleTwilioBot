@@ -5,8 +5,16 @@ const { logger } = require("../utils/logger");
 const { createTwilioRouter } = require("./routes/twilio");
 const { createCampaignRouter } = require("./routes/campaigns");
 const { CampaignManager } = require("./campaignManager");
+const {
+  createCloudflaredStatus,
+  getCloudflaredStatusSnapshot,
+  startCloudflaredTunnel,
+  stopCloudflaredTunnel
+} = require("./cloudflared");
 const { sheetsAdapter, elevenLabsTts } = require("./services");
 const { buildVoicePrompts } = require("./voicePrompts");
+
+const defaultCloudflaredStatus = createCloudflaredStatus(config.cloudflare);
 
 function requestLoggerMiddleware(req, res, next) {
   const startedAt = Date.now();
@@ -31,9 +39,10 @@ function mountCampaignRoutes(app, campaignManager) {
   app.use("/campaigns", createCampaignRouter({ manager: campaignManager }));
 }
 
-function createApp(promptAudioUrls) {
+function createApp(promptAudioUrls, options = {}) {
   const app = express();
   const campaignManager = new CampaignManager({ config });
+  const cloudflaredStatus = options.cloudflaredStatus || defaultCloudflaredStatus;
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
@@ -42,6 +51,13 @@ function createApp(promptAudioUrls) {
 
   app.get("/healthz", (req, res) => {
     res.status(200).json({ ok: true });
+  });
+
+  app.get("/system/status", (req, res) => {
+    res.status(200).json({
+      ok: true,
+      cloudflareTunnel: getCloudflaredStatusSnapshot(cloudflaredStatus)
+    });
   });
 
   mountTwilioRoutes(app, promptAudioUrls);
@@ -75,6 +91,43 @@ async function warmupVoicePrompts() {
   return urls;
 }
 
+function startServer(options) {
+  const {
+    app,
+    config,
+    logger,
+    startTunnel = startCloudflaredTunnel,
+    stopTunnel = stopCloudflaredTunnel,
+    cloudflaredStatus = defaultCloudflaredStatus,
+    exitProcess = process.exit
+  } = options;
+  let cloudflaredProcess = null;
+
+  const server = app.listen(config.server.port, () => {
+    logger.info("server.started", {
+      port: config.server.port
+    });
+    cloudflaredProcess = startTunnel(config.cloudflare, { logger, status: cloudflaredStatus });
+  });
+
+  function shutdown(signal) {
+    logger.info("server.shutdown_requested", { signal });
+    stopTunnel(cloudflaredProcess, logger);
+    server.close(() => {
+      logger.info("server.stopped");
+      exitProcess(0);
+    });
+  }
+
+  return {
+    server,
+    shutdown,
+    getCloudflaredProcess() {
+      return cloudflaredProcess;
+    }
+  };
+}
+
 if (require.main === module) {
   (async () => {
     let promptAudioUrls = new Map();
@@ -85,12 +138,16 @@ if (require.main === module) {
       promptAudioUrls = new Map();
     }
 
-    const app = createApp(promptAudioUrls);
-    app.listen(config.server.port, () => {
-      logger.info("server.started", {
-        port: config.server.port
-      });
+    const app = createApp(promptAudioUrls, { cloudflaredStatus: defaultCloudflaredStatus });
+    const runtime = startServer({
+      app,
+      config,
+      logger,
+      cloudflaredStatus: defaultCloudflaredStatus
     });
+
+    process.on("SIGINT", runtime.shutdown);
+    process.on("SIGTERM", runtime.shutdown);
   })().catch((error) => {
     logger.error("server.start_failed", { error: error.message });
     process.exit(1);
@@ -99,5 +156,6 @@ if (require.main === module) {
 
 module.exports = {
   createApp,
+  startServer,
   warmupVoicePrompts
 };

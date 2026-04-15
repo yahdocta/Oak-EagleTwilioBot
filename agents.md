@@ -33,6 +33,7 @@ Use this file as the quick orientation map before changing the project. The full
 | Area | Files |
 | --- | --- |
 | App entrypoint | `src/server/app.js` |
+| Cloudflare Tunnel startup | `src/server/cloudflared.js` |
 | Twilio call flow | `src/server/routes/twilio.js` |
 | Campaign HTTP endpoints | `src/server/routes/campaigns.js` |
 | Web UI campaign manager | `src/server/campaignManager.js` |
@@ -69,6 +70,7 @@ If the user asks about the web UI:
 - Read `src/server/public/index.html`, `src/server/public/app.js`, and `src/server/public/styles.css`.
 - Read `src/server/routes/campaigns.js` for upload/start/end/state HTTP routes.
 - Read `src/server/campaignManager.js` for background campaign state, activity, and stop behavior.
+- Read `src/server/cloudflared.js` and `/system/status` handling in `src/server/app.js` for the tunnel status metric.
 
 If the user asks about the live phone conversation:
 
@@ -102,11 +104,13 @@ If the user asks about deployment:
 
 - Start with `docs/server-setup-guide.md`.
 - Then check `src/config/index.js` for required environment variables and validation rules.
+- Check `src/server/cloudflared.js` if the issue involves Cloudflare Tunnel process startup.
 
 ## Operational Notes
 
 - `./run <file.csv> [campaign-id]` starts a campaign from `campaign-inputs/` when only a filename is provided.
 - `npm start` runs the Express server.
+- `npm start` also starts Cloudflare Tunnel by default when `CLOUDFLARED_AUTO_START=true`.
 - `GET /` serves the campaign console.
 - `npm run check` validates config by loading `src/config`.
 - `npm test` runs the Node test suite.
