@@ -60,12 +60,48 @@
           <h2>Campaign Controls</h2>
           <label for="campaignInput">Campaign ID</label>
           <input id="campaignInput" name="campaignId" type="text" placeholder="spring-test" />
+          <label class="checkbox-row" for="loopEnabled">
+            <input id="loopEnabled" name="loopEnabled" type="checkbox" />
+            <span>Run in loop</span>
+          </label>
+          <label for="loopIntervalHours">Loop interval hours</label>
+          <input
+            id="loopIntervalHours"
+            name="loopIntervalHours"
+            type="number"
+            min="0.1"
+            step="0.1"
+            value="24"
+          />
           <div class="button-row">
             <button id="startButton" type="submit">Start Campaign</button>
             <button id="endButton" class="danger" type="button">End Campaign</button>
           </div>
           <p id="summaryText" class="muted">Upload a CSV, then start a campaign.</p>
         </form>
+      </section>
+
+      <section class="recurring-panel">
+        <div class="activity-header">
+          <h2>Recurring Calls</h2>
+          <span id="recurringSummary" class="muted">No leads uploaded.</span>
+        </div>
+        <div class="lead-table-wrap">
+          <table class="lead-table">
+            <thead>
+              <tr>
+                <th>Lead</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Last call</th>
+                <th>Intent</th>
+                <th>Round</th>
+                <th>Call SID</th>
+              </tr>
+            </thead>
+            <tbody id="recurringLeadList"></tbody>
+          </table>
+        </div>
       </section>
 
       <section class="activity-panel">

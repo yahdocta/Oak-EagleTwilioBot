@@ -12,6 +12,10 @@ function makeCsv(rowCount) {
   return `${rows.join("\n")}\n`;
 }
 
+function makeCityCsv() {
+  return "lead_id,lead_name,lead_phone,city\nlead-1,Lead 1,+15550000001,Asheville\n";
+}
+
 test("startCampaign creates outbound calls from a fake CSV", async () => {
   const dir = makeTempDir();
   const csvPath = writeTempFile(dir, "campaign.csv", makeCsv(2));
@@ -44,6 +48,30 @@ test("startCampaign creates outbound calls from a fake CSV", async () => {
   assert.match(createdCalls[0].url, /lead_name=Lead\+1/);
   assert.match(createdCalls[0].statusCallback, /^https:\/\/hooks\.example\.test\/twilio\/status\?/);
   assert.match(createdCalls[0].asyncAmdStatusCallback, /\/twilio\/voice\/status\?/);
+});
+
+test("startCampaign passes lead city through callback URLs when present", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign-city.csv", makeCityCsv());
+  const createdCalls = [];
+  const twilioClient = {
+    calls: {
+      create: async (payload) => {
+        createdCalls.push(payload);
+        return { sid: "CA-city" };
+      }
+    }
+  };
+
+  await startCampaign(csvPath, {
+    config: buildTestConfig(),
+    campaignId: "city-test",
+    twilioClient
+  });
+
+  assert.match(createdCalls[0].url, /lead_city=Asheville/);
+  assert.match(createdCalls[0].statusCallback, /lead_city=Asheville/);
+  assert.match(createdCalls[0].asyncAmdStatusCallback, /lead_city=Asheville/);
 });
 
 test("startCampaign reports individual call failures without aborting the campaign", async () => {
@@ -162,4 +190,38 @@ test("startCampaign skips queued leads when stop is requested", async () => {
     events.filter((entry) => entry.eventName === "campaign.lead_skipped").length,
     2
   );
+});
+
+test("startCampaign can dial an explicit lead list for loop rounds", async () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(dir, "campaign.csv", makeCsv(2));
+  const createdCalls = [];
+  const twilioClient = {
+    calls: {
+      create: async (payload) => {
+        createdCalls.push(payload);
+        return { sid: `CA-filtered-${createdCalls.length}` };
+      }
+    }
+  };
+
+  const summary = await startCampaign(csvPath, {
+    config: buildTestConfig(),
+    campaignId: "filtered-loop",
+    twilioClient,
+    leads: [
+      {
+        lead_id: "lead-retry",
+        lead_name: "Retry Lead",
+        lead_phone: "+15550009999"
+      }
+    ]
+  });
+
+  assert.equal(summary.totalLeads, 1);
+  assert.equal(summary.successCount, 1);
+  assert.equal(createdCalls.length, 1);
+  assert.equal(createdCalls[0].to, "+15550009999");
+  assert.match(createdCalls[0].url, /lead_id=lead-retry/);
+  assert.match(createdCalls[0].statusCallback, /campaign_id=filtered-loop/);
 });

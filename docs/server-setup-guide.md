@@ -102,7 +102,7 @@ http://localhost:3000/healthz
 http://localhost:3000/
 ```
 
-The `/` route is the campaign console for uploading CSVs, starting/ending campaigns, watching activity, and checking Cloudflare Tunnel status.
+The `/` route is the campaign console for uploading CSVs, starting/ending one-shot or looping campaigns, watching activity, viewing the recurring call list, and checking Cloudflare Tunnel status.
 
 By default, `npm start` also launches:
 
@@ -189,11 +189,12 @@ In Twilio Console for your phone number (Voice webhook):
 1. Start app.
 2. Confirm startup logs include `cloudflared.starting`.
 3. Open `https://calls.yourdomain.com/`.
-4. Upload a tiny CSV with 1-2 leads.
+4. Upload a tiny CSV with 1-2 leads. Add an optional `city` or `lead_city` column if you want the opening question to include the city.
 5. Start the campaign from the page.
 6. Watch the Activity section.
 7. Confirm the Cloudflare Tunnel metric says `Running`.
-8. Confirm rows are appended to your Google Sheet after calls finish.
+8. Confirm confirmed interested leads are appended to your Google Sheet after calls finish. Declines, no-answer, voicemail, and unresolved calls update the campaign console but do not create Sheet rows.
+9. Confirm the Google Sheet has a column `G` header such as `call_transcript`; the app writes the captured call transcript there for interested leads.
 
 ## 8. Troubleshooting quick list
 
@@ -214,9 +215,11 @@ Current status:
 - Campaign runner implemented: POST /campaigns/:id/start
 - Web campaign console implemented at GET /
 - Web campaign endpoints implemented under /campaigns/ui/*
+- Web console supports loop campaigns and a recurring call list with per-lead status
 - Cloudflare Tunnel auto-start implemented through npm start when CLOUDFLARED_AUTO_START=true
 - Cloudflare Tunnel status is exposed at GET /system/status and shown in the web console
-- Intent parsing + Sheets adapter implemented
+- Intent parsing + phone extraction + interested-lead Sheets adapter implemented
+- Google Sheets appends confirmed interested leads only, with call transcript in column G
 - service-account.json exists locally
 
 Need help with:

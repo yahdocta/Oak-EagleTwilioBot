@@ -9,6 +9,16 @@ test("parseInterestIntent recognizes positive replies", () => {
     intent: "yes",
     confidence: 0.9
   });
+
+  for (const transcript of [
+    "I am",
+    "I'm interested",
+    "yup",
+    "absolutely",
+    "definitely interested in selling"
+  ]) {
+    assert.equal(parseInterestIntent(transcript).intent, "yes");
+  }
 });
 
 test("parseInterestIntent recognizes negative and stop replies", () => {
@@ -16,6 +26,17 @@ test("parseInterestIntent recognizes negative and stop replies", () => {
     intent: "no",
     confidence: 0.92
   });
+
+  for (const transcript of [
+    "nope",
+    "nah",
+    "no thanks",
+    "not right now",
+    "I'm not interested",
+    "we are not selling"
+  ]) {
+    assert.equal(parseInterestIntent(transcript).intent, "no");
+  }
 });
 
 test("parseInterestIntent treats ambiguous replies as unknown", () => {
@@ -59,8 +80,23 @@ test("parsePreferredPhone converts spoken digits including oh", () => {
 test("parsePreferredPhone keeps the longer direct digit candidate and normalizes it", () => {
   const parsed = parsePreferredPhone("call 15551234567, extension five");
 
-  assert.equal(parsed.phoneRaw, "155512345675");
+  assert.equal(parsed.phoneRaw, "15551234567");
   assert.equal(parsed.phoneNormalized, "+15551234567");
+});
+
+test("parsePreferredPhone extracts a phone number from extra speech", () => {
+  assert.equal(
+    parsePreferredPhone("yeah sure you can reach me on my cell at 949 205 6081 after lunch").phoneNormalized,
+    "+19492056081"
+  );
+  assert.equal(
+    parsePreferredPhone("my number is five five five one two three four five six seven, thanks").phoneNormalized,
+    "+15551234567"
+  );
+  assert.equal(
+    parsePreferredPhone("use 555-123-4567 extension 89").phoneNormalized,
+    "+15551234567"
+  );
 });
 
 test("parsePreferredPhone rejects empty, short, and non-US numbers", () => {

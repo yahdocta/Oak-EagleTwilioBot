@@ -1,5 +1,6 @@
 const fs = require("fs");
 const { parse } = require("csv-parse/sync");
+const { getLeadCity } = require("./leadCity");
 
 const REQUIRED_COLUMNS = ["lead_id", "lead_phone"];
 
@@ -43,11 +44,18 @@ function parseLeadsCsv(csvPath) {
   }
 
   assertColumns(Object.keys(records[0]));
-  return records.map((record) => ({
-    lead_id: String(record.lead_id || "").trim(),
-    lead_name: buildLeadName(record),
-    lead_phone: String(record.lead_phone || "").trim()
-  }));
+  return records.map((record) => {
+    const lead = {
+      lead_id: String(record.lead_id || "").trim(),
+      lead_name: buildLeadName(record),
+      lead_phone: String(record.lead_phone || "").trim()
+    };
+    const leadCity = getLeadCity(record);
+    if (leadCity) {
+      lead.lead_city = leadCity;
+    }
+    return lead;
+  });
 }
 
 module.exports = {

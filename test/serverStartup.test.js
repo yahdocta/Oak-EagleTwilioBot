@@ -185,3 +185,31 @@ test("static web UI includes Cloudflare Tunnel status metric hooks", async (t) =
   assert.match(html, /id="tunnelStatus"/);
   assert.match(html, /id="tunnelDetail"/);
 });
+
+test("static web UI includes recurring call list hooks", async (t) => {
+  const app = createApp(new Map(), {
+    cloudflaredStatus: createCloudflaredStatus({ autoStart: false })
+  });
+  const server = app.listen(0, "127.0.0.1");
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await waitForListening(server);
+  const { port } = server.address();
+
+  const response = await fetch(`http://127.0.0.1:${port}/`);
+  const html = await response.text();
+  const jsResponse = await fetch(`http://127.0.0.1:${port}/app.js`);
+  const js = await jsResponse.text();
+  const cssResponse = await fetch(`http://127.0.0.1:${port}/styles.css`);
+  const css = await cssResponse.text();
+
+  assert.equal(response.status, 200);
+  assert.equal(jsResponse.status, 200);
+  assert.equal(cssResponse.status, 200);
+  assert.match(html, /Recurring Calls/);
+  assert.match(html, /id="recurringSummary"/);
+  assert.match(html, /id="recurringLeadList"/);
+  assert.match(js, /function renderRecurringCalls/);
+  assert.match(js, /recurringCallList/);
+  assert.match(css, /\.lead-table/);
+  assert.match(css, /\.status-badge/);
+});

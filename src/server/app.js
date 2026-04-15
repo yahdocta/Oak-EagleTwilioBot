@@ -31,8 +31,8 @@ function requestLoggerMiddleware(req, res, next) {
   next();
 }
 
-function mountTwilioRoutes(app, promptAudioUrls) {
-  app.use("/twilio", createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }));
+function mountTwilioRoutes(app, promptAudioUrls, campaignManager) {
+  app.use("/twilio", createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls, campaignManager }));
 }
 
 function mountCampaignRoutes(app, campaignManager) {
@@ -60,7 +60,7 @@ function createApp(promptAudioUrls, options = {}) {
     });
   });
 
-  mountTwilioRoutes(app, promptAudioUrls);
+  mountTwilioRoutes(app, promptAudioUrls, campaignManager);
   mountCampaignRoutes(app, campaignManager);
 
   app.use((error, req, res, next) => {

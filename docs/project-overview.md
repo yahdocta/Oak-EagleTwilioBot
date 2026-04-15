@@ -1,9 +1,9 @@
 # Oak & Eagle Twilio Bot Project Overview
 
-This project is a Node.js outbound voice bot for landowner outreach. It starts calls through Twilio from CSV lead lists, plays a natural voice prompt using ElevenLabs-generated audio when configured, asks whether the lead is interested in selling land, captures a preferred callback number from interested leads, and logs final outcomes to Google Sheets.
+This project is a Node.js outbound voice bot for landowner outreach. It starts calls through Twilio from CSV lead lists, plays a natural voice prompt using ElevenLabs-generated audio when configured, asks whether the lead is interested in selling land, captures a preferred callback number from interested leads, and logs confirmed interested leads to Google Sheets.
 
-The current implementation is a focused Phase 1 prototype: CSV in, Twilio calls out, speech gathered by Twilio, simple rules-based parsing, Google Sheets logging, and basic voicemail handling.
-It also includes a small web campaign console for uploading CSVs, starting/stopping a campaign, and watching campaign activity from a browser.
+The current implementation is a focused prototype: CSV in, Twilio calls out, speech gathered by Twilio, simple rules-based parsing, Google Sheets logging for interested leads, basic voicemail handling, and optional recurring campaign loops.
+It also includes a small web campaign console for uploading CSVs, starting/stopping a campaign, watching campaign activity, and viewing the recurring call list from a browser.
 
 ## What It Does
 
@@ -18,11 +18,18 @@ At a high level, the bot:
    Hi this is Kevin from Oak and Eagle, are you interested in selling your land?
    ```
 
+   If the lead has a valid city, the prompt includes it:
+
+   ```text
+   Hi this is Kevin from Oak and Eagle, are you interested in selling your land in Asheville?
+   ```
+
 5. Parses the lead response as `yes`, `no`, or `unknown`.
 6. If the lead says yes, asks for the best phone number to reach them.
-7. Parses and normalizes the spoken phone number.
+7. Parses and normalizes any usable US phone number from the spoken response.
 8. Ends the call politely.
-9. Writes the final call outcome to Google Sheets.
+9. Writes confirmed interested leads to Google Sheets with the captured call transcript.
+10. In recurring loop mode, keeps unresolved/no-answer leads in the campaign until they confirm interest, clearly decline, or the campaign is stopped.
 
 ## Tech Stack
 
@@ -79,6 +86,29 @@ Use it to:
 3. End a running campaign.
 4. Monitor upload/start/call-create/failure/stop activity.
 5. Check whether the Cloudflare Tunnel is disabled, starting, running, stopped, or errored.
+6. View the recurring call list, including each lead's current status, last call status, last parsed intent, loop round, and last Twilio Call SID.
+
+Campaigns can be started as one-shot runs or recurring loop runs. In loop mode,
+the manager keeps unresolved/no-answer leads in the campaign and calls them again
+after the configured interval. Leads that clearly say no are marked declined and
+removed. Leads that confirm interest are logged to Google Sheets, marked logged,
+and removed.
+
+Recurring call list statuses include:
+
+```text
+ready
+pending
+calling
+active
+waiting_next_loop
+retrying
+logged
+declined
+call_failed
+skipped
+unresolved
+```
 
 Uploaded CSV files are stored under:
 
@@ -96,7 +126,7 @@ POST /campaigns/ui/start
 POST /campaigns/ui/end
 ```
 
-The UI state is in memory. If the Node process restarts, the page loses the currently uploaded file selection, current campaign status, and activity history.
+The UI state is in memory. If the Node process restarts, the page loses the currently uploaded file selection, current campaign status, recurring call list state, and activity history.
 
 ### 1. Start A Campaign
 
@@ -150,15 +180,35 @@ lead_id,lead_name,lead_phone
 1,Jon Riemann,+19493008565
 ```
 
+Optional city columns:
+
+```text
+lead_city,city,property_city,situs_city,site_city,mailing_city
+```
+
+If one of those columns contains a valid city, the opening prompt uses it. Blank
+values, placeholders such as `unknown` or `n/a`, numeric values such as ZIP
+codes, and address-like strings with unsupported characters are ignored.
+
+City sample format:
+
+```csv
+lead_id,lead_name,lead_phone,city
+1,Jon Riemann,+19493008565,Asheville
+```
+
 Each parsed lead becomes:
 
 ```js
 {
   lead_id: "...",
   lead_name: "...",
-  lead_phone: "..."
+  lead_phone: "...",
+  lead_city: "..."
 }
 ```
+
+`lead_city` is omitted when no valid city is found.
 
 ### 3. Create Twilio Calls
 
@@ -186,6 +236,7 @@ Lead context is attached as query parameters so the webhook can identify the lea
 lead_id
 lead_name
 lead_phone
+lead_city
 campaign_id
 ```
 
@@ -196,9 +247,10 @@ When called by the web UI, `startCampaign` also receives:
 ```js
 shouldStop
 onEvent
+leads
 ```
 
-`shouldStop` lets the web UI stop queued leads before they are called. `onEvent` feeds the activity monitor with call creation, call creation failure, and skipped-lead events.
+`shouldStop` lets the web UI stop queued leads before they are called. `onEvent` feeds the activity monitor and recurring call list with call creation, call creation failure, and skipped-lead events. `leads` lets the campaign manager dial a filtered set of still-pending leads during recurring loop rounds without reparsing or redialing the full CSV.
 
 ## Twilio Webhook Flow
 
@@ -250,14 +302,16 @@ Possible parser results:
 If intent is `yes`:
 
 1. The app stores `interest_intent: "yes"` in memory for the call SID.
-2. It asks for the best phone number.
-3. It redirects the next speech result to `/twilio/voice/contact`.
+2. It appends the speech result to the in-memory call transcript.
+3. It asks for the best phone number.
+4. It redirects the next speech result to `/twilio/voice/contact`.
 
 If intent is `no`:
 
 1. The app stores `interest_intent: "no"`.
-2. It says goodbye.
-3. It hangs up.
+2. It appends the speech result to the in-memory call transcript.
+3. It says goodbye.
+4. It hangs up.
 
 If intent is `unknown`:
 
@@ -268,7 +322,7 @@ If intent is `unknown`:
    Sorry, I did not catch that. Are you interested in selling your land, yes or no?
    ```
 
-3. After the retry limit, it treats the result as not interested and ends the call.
+3. After the retry limit, it treats the result as unresolved/unknown and ends the call.
 
 The current config enforces `INTENT_MAX_RETRIES=2`.
 
@@ -284,16 +338,20 @@ parsePreferredPhone(transcript)
 
 The parser:
 
-1. Extracts direct digits from the transcript.
+1. Scans the full response for phone-like digit sequences.
 2. Converts simple number words to digits.
-3. Chooses the longer candidate.
-4. Normalizes US numbers to E.164.
+3. Uses the first candidate that can normalize to a US phone number.
+4. Ignores extra speech before or after the number, such as "call me at" or "extension 89".
+5. Rejects obvious non-US international numbers, such as `+44 ...`.
+6. Normalizes US numbers to E.164.
 
 Examples:
 
 ```text
 949 300 8565 -> +19493008565
+yeah you can reach me at 949 205 6081 after lunch -> +19492056081
 one nine four nine three zero zero eight five six five -> +19493008565
+use 555-123-4567 extension 89 -> +15551234567
 ```
 
 If the number cannot be parsed, the app retries up to `INTENT_MAX_RETRIES`.
@@ -316,7 +374,7 @@ Then it hangs up.
 
 This route receives Twilio call status callbacks.
 
-It ignores non-terminal statuses such as ringing or in-progress. It only logs to Sheets when the status is terminal.
+It ignores non-terminal statuses such as ringing or in-progress. Terminal callbacks resolve the in-memory call state, update the campaign manager, and append to Google Sheets only when the lead is confirmed interested.
 
 Terminal statuses:
 
@@ -332,9 +390,12 @@ When a terminal status arrives, the app:
 
 1. Looks up the in-memory call state by `CallSid`.
 2. Builds the final outcome.
-3. Appends one row to Google Sheets.
-4. Marks the call SID as finalized.
-5. Deletes the temporary in-memory state.
+3. Appends one row to Google Sheets only when the lead has confirmed interest, reached the contact step, and the final call status is `completed`.
+4. Notifies the campaign manager so the recurring call list can mark the lead as logged, declined, waiting for the next loop, unresolved, or failed.
+5. Marks the call SID as finalized.
+6. Deletes the temporary in-memory state.
+
+Non-answer outcomes such as `no-answer`, `busy`, and `canceled` never write an interested lead row. They remain eligible for another call in loop mode. Explicit `no` outcomes are removed from the campaign and shown as declined.
 
 Duplicate terminal callbacks are ignored.
 
@@ -354,12 +415,16 @@ Current prompts:
 
 ```text
 Hi this is Kevin from Oak and Eagle, are you interested in selling your land?
+Hi this is Kevin from Oak and Eagle, are you interested in selling your land in Asheville?
 Great, what is the best phone number to reach you?
 Thanks for your time. Have a great day.
 Sorry, I did not catch that. Are you interested in selling your land, yes or no?
 I could not capture the number clearly. Please say the best phone number to reach you.
 Thank you, we will be in touch soon.
 ```
+
+The city-specific intro is generated at call time from a valid lead city, not as
+a static prompt constant.
 
 The voicemail prompt comes from:
 
@@ -432,6 +497,8 @@ The phone parser supports:
 - Numeric transcripts: `9493008565`
 - Formatted numbers: `(949) 300-8565`
 - Basic spoken digits: `nine four nine three zero zero eight five six five`
+- Extra words around the number: `you can reach me at 949 205 6081 after lunch`
+- Extensions after the number: `555-123-4567 extension 89`
 - `oh` as zero
 
 It normalizes:
@@ -441,6 +508,9 @@ It normalizes:
 11 digits starting with 1 -> +1XXXXXXXXXX
 longer digits starting with 1 -> first 11 digits
 ```
+
+When extra digits appear after a phone-like number, such as an extension, the
+parser keeps the phone number and ignores the extra digits.
 
 It does not currently handle more complex speech like:
 
@@ -469,7 +539,12 @@ preferred_phone
 interest_intent
 call_status
 timestamp_utc
+call_transcript
 ```
+
+The transcript column is appended as column `G`, so the original `A:F` column order stays unchanged.
+
+Only confirmed interested leads are appended to Sheets. Declines, no-answer, busy, canceled, failed, voicemail, and unresolved calls update campaign state but do not create a Sheet row.
 
 This is the actual implemented schema. It is narrower than the original archived spec in `docs/archive/specs.md`, which proposed additional fields like `lead_id`, `call_sid`, `answer_type`, `intent_confidence`, `retry_count`, and notes.
 
@@ -487,9 +562,13 @@ v/f
 
 Meaning:
 
-- `yes`: lead showed interest and went through the preferred-phone path.
-- `no`: lead said no, was unclear after retries, did not answer, was busy, or canceled.
+- `yes`: lead showed interest, reached the preferred-phone/contact path, and was logged to Sheets.
+- `no`: lead clearly said no or otherwise confirmed no selling intent.
 - `v/f`: voicemail/failure-style outcome. Failed calls are forced to `v/f`, and machine/voicemail detections use `v/f`.
+
+For campaign state, unresolved or unanswered calls are usually kept as `unknown`
+and shown as `waiting_next_loop` in loop mode or `unresolved` in one-shot mode.
+They are not written to Sheets.
 
 ### `call_status`
 
@@ -688,9 +767,15 @@ http://SERVER_IP:3000/
 2. Open `http://SERVER_IP:3000/`.
 3. Upload a CSV.
 4. Enter an optional campaign ID.
-5. Click Start Campaign.
-6. Watch the Activity section for call creation and errors.
-7. Click End Campaign to stop queued leads and request active calls to hang up.
+5. Optionally check Run in loop and set the loop interval in hours.
+6. Click Start Campaign.
+7. Watch the Recurring Calls table for each lead's status.
+8. Watch the Activity section for call creation, logging, decline, retry, and stop events.
+9. Click End Campaign to stop queued leads and request active calls to hang up.
+
+Loop mode keeps running until stopped or until every lead is removed from the
+campaign. Leads are removed when they clearly decline or confirm interest.
+No-answer/unresolved leads stay pending and are retried after each interval.
 
 The End Campaign button is best-effort: it stops leads that have not started yet and calls Twilio to mark active calls as completed. Calls that already finished or cannot be updated by Twilio may still produce normal terminal callbacks.
 
@@ -728,7 +813,8 @@ The CLI prints a JSON summary:
       "lead": {
         "lead_id": "1",
         "lead_name": "Jon Riemann",
-        "lead_phone": "+19493008565"
+        "lead_phone": "+19493008565",
+        "lead_city": "Asheville"
       },
       "callSid": "CA..."
     }
@@ -787,6 +873,7 @@ This state tracks:
 - Lead name
 - Lead phone
 - Preferred phone
+- Call transcript
 - Interest intent
 - Machine detection
 - Finalized call SIDs
@@ -800,6 +887,8 @@ The web UI campaign manager also stores state in memory:
 - Current campaign ID
 - Recent activity log
 - Active call SIDs created by the current campaign
+- Pending lead IDs for recurring loop campaigns
+- Recurring call list statuses and last call metadata
 - Last run summary
 
 This means the campaign console is operationally useful while the process is running, but it is not a durable campaign database.
@@ -831,14 +920,14 @@ Errors are written to `stderr`; other log levels are written to `stdout`.
 ## Current Limitations
 
 - Call state is in memory and not durable across restarts.
-- Web UI campaign state and activity history are also in memory and not durable across restarts.
+- Web UI campaign state, recurring call list state, and activity history are also in memory and not durable across restarts.
 - The web UI and campaign endpoints do not implement authentication yet. Put the app behind a trusted access layer before exposing it broadly.
-- The Sheets schema omits some useful audit fields from the original spec, including `lead_id`, `call_sid`, `answer_type`, `retry_count`, and transcript.
+- The Sheets schema omits some useful audit fields from the original spec, including `lead_id`, `call_sid`, `answer_type`, and `retry_count`.
 - Intent parsing is regex-based and can misclassify nuanced responses.
-- Phone parsing only handles simple digit and number-word speech.
+- Phone parsing handles common digit, formatted, and simple number-word speech, but not phrases like `nine forty-nine three hundred...`.
 - The legacy campaign HTTP endpoint accepts arbitrary resolved CSV paths and should remain internal/trusted unless guarded.
 - No explicit calling-hours or compliance enforcement is implemented in this service.
-- No automatic redial logic is implemented, which matches the Phase 1 spec.
+- Recurring loop campaign state is in memory and is not durable across restarts.
 - ElevenLabs prompt URLs depend on this server being publicly reachable.
 - Cached ElevenLabs MP3 files live under `.cache/elevenlabs` and are not part of git.
 
@@ -901,7 +990,9 @@ If Sheets rows do not appear:
 1. Confirm `GOOGLE_SERVICE_ACCOUNT_JSON` points to a real file.
 2. Confirm the service account has editor access to the Google Sheet.
 3. Confirm `SHEETS_SPREADSHEET_ID` and `SHEETS_SHEET_NAME`.
-4. Check logs for `sheets.append.retry` or `SHEETS_APPEND_FAILED`.
+4. Remember the app only writes confirmed interested leads to Sheets.
+5. Confirm the Sheet has column `G` available for `call_transcript`.
+6. Check logs for `sheets.append.retry` or `SHEETS_APPEND_FAILED`.
 
 If voicemail handling seems odd:
 
@@ -914,7 +1005,7 @@ If voicemail handling seems odd:
 
 - Persist call state outside process memory.
 - Persist campaign run history outside process memory.
-- Add call transcript and Twilio call SID to the sheet.
+- Add lead ID, Twilio call SID, answer type, and retry count to the sheet.
 - Add authentication around the web UI and campaign endpoints.
 - Add dry-run mode for campaign dialing.
 - Add call window and timezone compliance checks before dialing.

@@ -35,6 +35,51 @@ function toDigitsFromWords(text) {
   return digits.join("");
 }
 
+function tokenToDigit(token) {
+  if (NUMBER_WORD_TO_DIGIT[token]) {
+    return NUMBER_WORD_TO_DIGIT[token];
+  }
+  if (/^\d+$/.test(token)) {
+    return token;
+  }
+  return null;
+}
+
+function buildTokenRunCandidates(text) {
+  const tokens = tokenizeTranscript(text);
+  const candidates = [];
+  let current = "";
+
+  for (const token of tokens) {
+    const digit = tokenToDigit(token);
+    if (digit !== null) {
+      current += digit;
+      continue;
+    }
+
+    if (current) {
+      candidates.push(current);
+      current = "";
+    }
+  }
+
+  if (current) {
+    candidates.push(current);
+  }
+
+  return candidates;
+}
+
+function buildPhoneCandidates(text) {
+  const source = String(text || "");
+  const phoneLikeMatches =
+    source.match(/(?:\+?1[\s().-]*)?(?:\(?\d{3}\)?[\s.-]*)\d{3}[\s.-]*\d{4}/g) || [];
+  const phoneLikeCandidates = phoneLikeMatches.map((match) => match.replace(/\D/g, ""));
+  const tokenRunCandidates = buildTokenRunCandidates(source);
+  const allDigitsCandidate = source.replace(/[^\d]/g, "");
+  return [...phoneLikeCandidates, ...tokenRunCandidates, allDigitsCandidate].filter(Boolean);
+}
+
 function normalizeUsPhone(rawDigits) {
   const digits = String(rawDigits || "").replace(/\D/g, "");
   if (digits.length === 10) {
@@ -54,11 +99,16 @@ function parsePreferredPhone(transcript) {
   if (!source) {
     return { phoneRaw: "", phoneNormalized: null, confidence: 0 };
   }
+  if (/^\s*\+(?!1(?:\D|$))/.test(source)) {
+    return {
+      phoneRaw: source.replace(/[^\d]/g, "") || source,
+      phoneNormalized: null,
+      confidence: 0.25
+    };
+  }
 
-  const directDigits = source.replace(/[^\d]/g, "");
-  const digitsFromWords = toDigitsFromWords(source);
-
-  const candidate = directDigits.length >= digitsFromWords.length ? directDigits : digitsFromWords;
+  const candidates = buildPhoneCandidates(source);
+  const candidate = candidates.find((value) => normalizeUsPhone(value)) || candidates[0] || toDigitsFromWords(source);
   const phoneNormalized = normalizeUsPhone(candidate);
 
   if (!phoneNormalized) {

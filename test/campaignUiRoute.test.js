@@ -48,8 +48,10 @@ function makeManager(overrides = {}) {
     uploadedCsv: null,
     uploadedLeadCount: null,
     activeCallCount: 0,
+    pendingLeadCount: 0,
     stopRequested: false,
     summary: null,
+    recurringCallList: [],
     activity: []
   };
 
@@ -63,8 +65,8 @@ function makeManager(overrides = {}) {
       state.activity = [{ message: "CSV uploaded" }];
       return state;
     },
-    start: (campaignId) => {
-      calls.push({ method: "start", campaignId });
+    start: (campaignId, options) => {
+      calls.push({ method: "start", campaignId, options });
       state.status = "running";
       state.campaignId = campaignId;
       return state;
@@ -93,6 +95,61 @@ test("campaign UI state route returns manager state", async (t) => {
   assert.equal(response.status, 200);
   assert.equal(payload.status, "idle");
   assert.deepEqual(manager.calls, []);
+});
+
+test("campaign UI state route returns recurring call list", async (t) => {
+  const manager = makeManager({
+    getState: () => ({
+      status: "running",
+      campaignId: "loop-test",
+      uploadedCsv: { name: "leads.csv" },
+      uploadedLeadCount: 2,
+      activeCallCount: 1,
+      pendingLeadCount: 1,
+      stopRequested: false,
+      summary: null,
+      activity: [],
+      recurringCallList: [
+        {
+          leadId: "lead-1",
+          leadName: "Ada Lovelace",
+          leadPhone: "+15550000001",
+          status: "active",
+          lastCallStatus: "",
+          lastIntent: "",
+          callSid: "CA-active",
+          round: 1,
+          isPending: true,
+          isActive: true,
+          updatedAt: "2026-04-15T00:00:00.000Z"
+        },
+        {
+          leadId: "lead-2",
+          leadName: "Grace Hopper",
+          leadPhone: "+15550000002",
+          status: "waiting_next_loop",
+          lastCallStatus: "no-answer",
+          lastIntent: "unknown",
+          callSid: "CA-missed",
+          round: 1,
+          isPending: true,
+          isActive: false,
+          updatedAt: "2026-04-15T00:01:00.000Z"
+        }
+      ]
+    })
+  });
+  const baseUrl = await withServer(t, manager);
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/state`);
+  const payload = await readJson(response);
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.recurringCallList.length, 2);
+  assert.equal(payload.recurringCallList[0].status, "active");
+  assert.equal(payload.recurringCallList[0].callSid, "CA-active");
+  assert.equal(payload.recurringCallList[1].status, "waiting_next_loop");
+  assert.equal(payload.recurringCallList[1].lastCallStatus, "no-answer");
 });
 
 test("campaign UI upload accepts CSV files and passes saved path to manager", async (t) => {
@@ -142,7 +199,7 @@ test("campaign UI start and end routes call manager controls", async (t) => {
   const startResponse = await fetch(`${baseUrl}/campaigns/ui/start`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ campaignId: "spring-test" })
+    body: JSON.stringify({ campaignId: "spring-test", loopEnabled: true, loopIntervalHours: 6 })
   });
   const startPayload = await readJson(startResponse);
 
@@ -150,6 +207,10 @@ test("campaign UI start and end routes call manager controls", async (t) => {
   assert.equal(startPayload.status, "running");
   assert.equal(manager.calls.at(-1).method, "start");
   assert.equal(manager.calls.at(-1).campaignId, "spring-test");
+  assert.deepEqual(manager.calls.at(-1).options, {
+    loopEnabled: true,
+    loopIntervalHours: 6
+  });
 
   const endResponse = await fetch(`${baseUrl}/campaigns/ui/end`, { method: "POST" });
   const endPayload = await readJson(endResponse);

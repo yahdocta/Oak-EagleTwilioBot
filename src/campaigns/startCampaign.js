@@ -34,10 +34,11 @@ async function startCampaign(csvPath, options) {
     campaignId,
     twilioClient = createTwilioClient(config),
     shouldStop = () => false,
-    onEvent = () => {}
+    onEvent = () => {},
+    leads: providedLeads = null
   } = options;
   const limit = pLimit(config.batch.maxConcurrency);
-  const leads = parseLeadsCsv(csvPath);
+  const leads = providedLeads || parseLeadsCsv(csvPath);
 
   const results = await Promise.all(
     leads.map((lead, index) =>
@@ -59,6 +60,7 @@ async function startCampaign(csvPath, options) {
             lead_id: lead.lead_id,
             lead_name: lead.lead_name,
             lead_phone: lead.lead_phone,
+            lead_city: lead.lead_city,
             campaign_id: campaignId || ""
           };
           const call = await twilioClient.calls.create({

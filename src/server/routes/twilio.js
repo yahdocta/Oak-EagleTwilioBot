@@ -5,7 +5,7 @@ const { config } = require("../../config");
 const { logger } = require("../../utils/logger");
 const { parseInterestIntent, parsePreferredPhone } = require("../../intent");
 const {
-  OUTBOUND_INTRO_PROMPT,
+  buildOutboundIntroPrompt,
   CONTACT_REQUEST_PROMPT,
   GOODBYE_PROMPT,
   INTENT_RETRY_PROMPT,
@@ -33,6 +33,7 @@ function collectCallContext(req) {
     lead_id: source.lead_id || "",
     lead_name: source.lead_name || "",
     lead_phone: source.lead_phone || "",
+    lead_city: source.lead_city || source.city || "",
     campaign_id: source.campaign_id || "",
     call_sid: source.CallSid || source.call_sid || "",
     call_status: source.CallStatus || source.call_status || "",
@@ -58,18 +59,24 @@ function buildQuery(context, overrides = {}) {
 }
 
 function addSpeech(voiceResponse, text, options) {
-  const { gather, config, promptAudioUrls } = options;
-  const target = gather || voiceResponse;
+  const { config, promptAudioUrls } = options;
   const audioUrl = promptAudioUrls ? promptAudioUrls.get(text) : null;
   if (audioUrl) {
-    target.play(audioUrl);
+    voiceResponse.play(audioUrl);
     return;
   }
 
-  target.say({ voice: config.twilio.voice || undefined }, text);
+  voiceResponse.say({ voice: config.twilio.voice || undefined }, text);
+}
+
+function addPromptThenGather(voiceResponse, promptText, gatherOptions, redirectUrl, speechOptions) {
+  addSpeech(voiceResponse, promptText, speechOptions);
+  voiceResponse.gather(gatherOptions);
+  voiceResponse.redirect({ method: "POST" }, redirectUrl);
 }
 
 const TERMINAL_CALL_STATUSES = new Set(["completed", "busy", "failed", "no-answer", "canceled"]);
+const UNANSWERED_CALL_STATUSES = new Set(["busy", "no-answer", "canceled"]);
 const callOutcomeState = new Map();
 const finalizedCallSids = new Set();
 const machineRedirectedCallSids = new Set();
@@ -81,19 +88,43 @@ function mergeCallOutcomeState(context, updates = {}) {
 
   const existing = callOutcomeState.get(context.call_sid) || {};
   callOutcomeState.set(context.call_sid, {
+    lead_id: context.lead_id || existing.lead_id || "",
     lead_name: context.lead_name || existing.lead_name || "",
     lead_phone: context.lead_phone || existing.lead_phone || "",
+    lead_city: context.lead_city || existing.lead_city || "",
+    campaign_id: context.campaign_id || existing.campaign_id || "",
     preferred_phone: existing.preferred_phone || "",
-    interest_intent: existing.interest_intent || "no",
+    interest_intent: existing.interest_intent || "unknown",
     machine_detected: existing.machine_detected || false,
+    intent_speech_received: existing.intent_speech_received || false,
+    contact_speech_received: existing.contact_speech_received || false,
+    call_transcript: existing.call_transcript || "",
     ...existing,
     ...updates
   });
 }
 
+function appendCallTranscript(context, label, transcript) {
+  const text = String(transcript || "").trim();
+  if (!context.call_sid || !text) {
+    return;
+  }
+
+  const existing = callOutcomeState.get(context.call_sid) || {};
+  const entry = `${label}: ${text}`;
+  mergeCallOutcomeState(context, {
+    call_transcript: existing.call_transcript ? `${existing.call_transcript}\n${entry}` : entry
+  });
+}
+
 function toTerminalIntention(value, callStatus) {
-  if (String(callStatus || "").toLowerCase() === "failed") {
+  const normalizedCallStatus = String(callStatus || "").toLowerCase();
+  if (normalizedCallStatus === "failed") {
     return "v/f";
+  }
+
+  if (UNANSWERED_CALL_STATUSES.has(normalizedCallStatus)) {
+    return "no";
   }
 
   const normalized = String(value || "").toLowerCase();
@@ -106,6 +137,18 @@ function toTerminalIntention(value, callStatus) {
   return "no";
 }
 
+function toCampaignInterestIntent(value, callStatus) {
+  const normalizedCallStatus = String(callStatus || "").toLowerCase();
+  if (UNANSWERED_CALL_STATUSES.has(normalizedCallStatus)) {
+    return "unknown";
+  }
+  if (normalizedCallStatus === "failed") {
+    return "v/f";
+  }
+
+  return String(value || "unknown").toLowerCase();
+}
+
 function toFinalCallStatus(callStatus, machineDetected) {
   if (machineDetected) {
     return "voicemail";
@@ -113,7 +156,15 @@ function toFinalCallStatus(callStatus, machineDetected) {
   return String(callStatus || "").toLowerCase();
 }
 
-function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
+function hasConfirmedInterest(savedState) {
+  if (!savedState || String(savedState.interest_intent || "").toLowerCase() !== "yes") {
+    return false;
+  }
+
+  return Boolean(savedState.preferred_phone || savedState.contact_speech_received);
+}
+
+function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls, campaignManager }) {
   const router = express.Router();
   const twilioClient = twilioClientFactory(config.twilio.accountSid, config.twilio.authToken);
   const withErrorHandling =
@@ -154,22 +205,17 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       }
 
       voiceResponse.pause({ length: 1 });
-      const gather = voiceResponse.gather({
+      const actionUrl = `/twilio/voice/intent?${buildQuery(context, { retry_count: 0 })}`;
+      addPromptThenGather(voiceResponse, buildOutboundIntroPrompt(context.lead_city), {
         input: "speech",
         speechTimeout: "auto",
-        action: `/twilio/voice/intent?${buildQuery(context, { retry_count: 0 })}`,
+        action: actionUrl,
         method: "POST",
         actionOnEmptyResult: true
-      });
-      addSpeech(voiceResponse, OUTBOUND_INTRO_PROMPT, {
-        gather,
+      }, actionUrl, {
         config,
         promptAudioUrls
       });
-      voiceResponse.redirect(
-        { method: "POST" },
-        `/twilio/voice/intent?${buildQuery(context, { retry_count: 0 })}`
-      );
       return respondTwiml(res, voiceResponse);
     })
   );
@@ -181,34 +227,26 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       const transcript = req.body.SpeechResult || "";
       const parsed = parseInterestIntent(transcript);
       const voiceResponse = new twiml.VoiceResponse();
-      mergeCallOutcomeState(context);
+      mergeCallOutcomeState(context, { intent_speech_received: Boolean(transcript.trim()) });
+      appendCallTranscript(context, "Intent", transcript);
 
       if (parsed.intent === "yes") {
         mergeCallOutcomeState(context, { interest_intent: "yes" });
-        const gather = voiceResponse.gather({
+        const actionUrl = `/twilio/voice/contact?${buildQuery(context, {
+          retry_count: 0,
+          interest_intent: "yes",
+          intent_confidence: parsed.confidence
+        })}`;
+        addPromptThenGather(voiceResponse, CONTACT_REQUEST_PROMPT, {
           input: "speech",
           speechTimeout: "auto",
-          action: `/twilio/voice/contact?${buildQuery(context, {
-            retry_count: 0,
-            interest_intent: "yes",
-            intent_confidence: parsed.confidence
-          })}`,
+          action: actionUrl,
           method: "POST",
           actionOnEmptyResult: true
-        });
-        addSpeech(voiceResponse, CONTACT_REQUEST_PROMPT, {
-          gather,
+        }, actionUrl, {
           config,
           promptAudioUrls
         });
-        voiceResponse.redirect(
-          { method: "POST" },
-          `/twilio/voice/contact?${buildQuery(context, {
-            retry_count: 0,
-            interest_intent: "yes",
-            intent_confidence: parsed.confidence
-          })}`
-        );
         return respondTwiml(res, voiceResponse);
       }
 
@@ -221,26 +259,18 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
 
       if (context.retry_count < config.batch.intentMaxRetries) {
         const nextRetryCount = context.retry_count + 1;
-        const gather = voiceResponse.gather({
+        const actionUrl = `/twilio/voice/intent?${buildQuery(context, { retry_count: nextRetryCount })}`;
+        addPromptThenGather(voiceResponse, INTENT_RETRY_PROMPT, {
           input: "speech",
           speechTimeout: "auto",
-          action: `/twilio/voice/intent?${buildQuery(context, { retry_count: nextRetryCount })}`,
+          action: actionUrl,
           method: "POST",
           actionOnEmptyResult: true
-        });
-        addSpeech(
-          voiceResponse,
-          INTENT_RETRY_PROMPT,
-          { gather, config, promptAudioUrls }
-        );
-        voiceResponse.redirect(
-          { method: "POST" },
-          `/twilio/voice/intent?${buildQuery(context, { retry_count: nextRetryCount })}`
-        );
+        }, actionUrl, { config, promptAudioUrls });
         return respondTwiml(res, voiceResponse);
       }
 
-      mergeCallOutcomeState(context, { interest_intent: "no" });
+      mergeCallOutcomeState(context, { interest_intent: "unknown" });
       addSpeech(voiceResponse, GOODBYE_PROMPT, { config, promptAudioUrls });
       voiceResponse.hangup();
       return respondTwiml(res, voiceResponse);
@@ -254,26 +284,22 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
       const transcript = req.body.SpeechResult || "";
       const parsedPhone = parsePreferredPhone(transcript);
       const voiceResponse = new twiml.VoiceResponse();
-      mergeCallOutcomeState(context, { interest_intent: "yes" });
+      mergeCallOutcomeState(context, {
+        interest_intent: "yes",
+        contact_speech_received: Boolean(transcript.trim())
+      });
+      appendCallTranscript(context, "Preferred phone", transcript);
 
       if (!parsedPhone.phoneNormalized && context.retry_count < config.batch.intentMaxRetries) {
         const nextRetryCount = context.retry_count + 1;
-        const gather = voiceResponse.gather({
+        const actionUrl = `/twilio/voice/contact?${buildQuery(context, { retry_count: nextRetryCount })}`;
+        addPromptThenGather(voiceResponse, CONTACT_RETRY_PROMPT, {
           input: "speech",
           speechTimeout: "auto",
-          action: `/twilio/voice/contact?${buildQuery(context, { retry_count: nextRetryCount })}`,
+          action: actionUrl,
           method: "POST",
           actionOnEmptyResult: true
-        });
-        addSpeech(
-          voiceResponse,
-          CONTACT_RETRY_PROMPT,
-          { gather, config, promptAudioUrls }
-        );
-        voiceResponse.redirect(
-          { method: "POST" },
-          `/twilio/voice/contact?${buildQuery(context, { retry_count: nextRetryCount })}`
-        );
+        }, actionUrl, { config, promptAudioUrls });
         return respondTwiml(res, voiceResponse);
       }
 
@@ -339,14 +365,41 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls }) {
 
     const savedState = context.call_sid ? callOutcomeState.get(context.call_sid) : null;
     const finalCallStatus = toFinalCallStatus(context.call_status || status, savedState && savedState.machine_detected);
-    await sheetsAdapter.appendCallOutcome({
+    const campaignInterestIntent = toCampaignInterestIntent(
+      savedState && savedState.interest_intent,
+      context.call_status
+    );
+    const confirmedInterest = hasConfirmedInterest(savedState);
+    const resolvedCampaignInterestIntent =
+      campaignInterestIntent === "yes" && !confirmedInterest ? "unknown" : campaignInterestIntent;
+    const finalInterestIntent = toTerminalIntention(
+      resolvedCampaignInterestIntent,
+      context.call_status
+    );
+    const outcome = {
+      lead_id: context.lead_id || (savedState && savedState.lead_id) || "",
       lead_name: context.lead_name || (savedState && savedState.lead_name) || "",
       lead_phone: context.lead_phone || (savedState && savedState.lead_phone) || "",
+      campaign_id: context.campaign_id || (savedState && savedState.campaign_id) || "",
+      call_sid: context.call_sid,
       preferred_phone: (savedState && savedState.preferred_phone) || "",
-      interest_intent: toTerminalIntention(savedState && savedState.interest_intent, context.call_status),
+      call_transcript: (savedState && savedState.call_transcript) || "",
+      interest_intent: finalInterestIntent,
       call_status: finalCallStatus,
       timestamp_utc: new Date().toISOString()
-    });
+    };
+
+    if (confirmedInterest && finalInterestIntent === "yes" && finalCallStatus === "completed") {
+      await sheetsAdapter.appendCallOutcome(outcome);
+    }
+
+    if (campaignManager && typeof campaignManager.handleCallOutcome === "function") {
+      campaignManager.handleCallOutcome({
+        ...outcome,
+        interest_intent: resolvedCampaignInterestIntent
+      });
+    }
+
     if (context.call_sid) {
       finalizedCallSids.add(context.call_sid);
       machineRedirectedCallSids.delete(context.call_sid);

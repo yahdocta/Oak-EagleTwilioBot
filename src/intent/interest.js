@@ -1,18 +1,34 @@
 const YES_PATTERNS = [
   /\byes\b/i,
   /\byeah\b/i,
+  /\bye\b/i,
   /\byep\b/i,
+  /\byup\b/i,
   /\bsure\b/i,
+  /\babsolutely\b/i,
+  /\bdefinitely\b/i,
   /\bok(?:ay)?\b/i,
-  /\binterested\b/i,
+  /\b(?:i am|i'?m|we are|we'?re)(?!\s+not)\b/i,
+  /\b(?:i am|i'?m|we are|we'?re)\s+interested\b/i,
+  /\binterested in selling\b/i,
   /\bthat works\b/i
 ];
 
 const NO_PATTERNS = [
   /\bno\b/i,
   /\bnope\b/i,
+  /\bnah\b/i,
+  /\bno thanks\b/i,
+  /\bnot now\b/i,
+  /\bnot right now\b/i,
+  /\bnot at this time\b/i,
   /\bnot interested\b/i,
+  /\bnot selling\b/i,
+  /\b(?:i am|i'?m|we are|we'?re)\s+not\b/i,
+  /\bdo not want\b/i,
+  /\bdon'?t want\b/i,
   /\bdo not call\b/i,
+  /\bdon'?t call\b/i,
   /\bstop calling\b/i,
   /\bwrong number\b/i
 ];

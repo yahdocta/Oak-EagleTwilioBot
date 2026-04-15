@@ -38,6 +38,41 @@ test("parseLeadsCsv builds lead_name from first_name and last_name", () => {
   ]);
 });
 
+test("parseLeadsCsv keeps valid lead city values from known city columns", () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(
+    dir,
+    "city.csv",
+    "lead_id,lead_name,lead_phone,city\nabc,Jaden Moreno,555-111-2222, St. Louis \n"
+  );
+
+  assert.deepEqual(parseLeadsCsv(csvPath), [
+    {
+      lead_id: "abc",
+      lead_name: "Jaden Moreno",
+      lead_phone: "555-111-2222",
+      lead_city: "St. Louis"
+    }
+  ]);
+});
+
+test("parseLeadsCsv ignores invalid lead city values", () => {
+  const dir = makeTempDir();
+  const csvPath = writeTempFile(
+    dir,
+    "invalid-city.csv",
+    "lead_id,lead_name,lead_phone,property_city\nabc,Jaden Moreno,555-111-2222,90210\n"
+  );
+
+  assert.deepEqual(parseLeadsCsv(csvPath), [
+    {
+      lead_id: "abc",
+      lead_name: "Jaden Moreno",
+      lead_phone: "555-111-2222"
+    }
+  ]);
+});
+
 test("parseLeadsCsv preserves quoted commas and skips empty lines", () => {
   const dir = makeTempDir();
   const csvPath = writeTempFile(

@@ -74,7 +74,10 @@ function createCampaignRouter(options = {}) {
   router.post(
     "/ui/start",
     withErrorHandling(async (req, res) => {
-      const state = manager.start(req.body.campaignId);
+      const state = manager.start(req.body.campaignId, {
+        loopEnabled: req.body.loopEnabled,
+        loopIntervalHours: req.body.loopIntervalHours
+      });
       return res.status(202).json(state);
     })
   );
@@ -114,7 +117,8 @@ function createCampaignRouter(options = {}) {
     if (
       error.message === "A campaign is already running." ||
       error.message === "Upload a CSV before starting a campaign." ||
-      error.message === "No campaign is currently running."
+      error.message === "No campaign is currently running." ||
+      error.message === "Loop interval must be a positive number of hours."
     ) {
       return res.status(409).json({ error: error.message });
     }

@@ -130,6 +130,7 @@ h2 {
 
 .metric,
 .panel,
+.recurring-panel,
 .activity-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -228,7 +229,8 @@ label {
   font-weight: 700;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   width: 100%;
   min-height: 48px;
   margin-bottom: 16px;
@@ -240,9 +242,24 @@ input[type="text"] {
 }
 
 input[type="text"]:focus,
+input[type="number"]:focus,
 .file-picker:focus-within {
   outline: 3px solid rgba(31, 122, 90, 0.22);
   border-color: var(--green);
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  color: var(--ink);
+}
+
+.checkbox-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
 }
 
 .button-row {
@@ -252,6 +269,7 @@ input[type="text"]:focus,
   margin-bottom: 16px;
 }
 
+.recurring-panel,
 .activity-panel {
   margin-top: 18px;
   overflow: hidden;
@@ -268,6 +286,99 @@ input[type="text"]:focus,
 
 .activity-header h2 {
   margin: 0;
+}
+
+.lead-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.lead-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+.lead-table th,
+.lead-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.lead-table th {
+  position: sticky;
+  top: 0;
+  background: #f3f6f1;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  z-index: 1;
+}
+
+.lead-table td {
+  overflow-wrap: anywhere;
+}
+
+.lead-table td strong,
+.lead-table td span {
+  display: block;
+}
+
+.lead-table td span {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.empty-cell {
+  color: var(--muted);
+  text-align: center;
+}
+
+.sid-cell {
+  max-width: 210px;
+  font-size: 0.86rem;
+}
+
+.status-badge {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: #fbfcfa;
+  color: var(--ink);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.status-badge.active,
+.status-badge.calling {
+  border-color: #78a895;
+  background: #e7f2ed;
+  color: var(--green-dark);
+}
+
+.status-badge.waiting_next_loop,
+.status-badge.retrying,
+.status-badge.pending {
+  border-color: #dec879;
+  background: #fff8db;
+  color: #6f5309;
+}
+
+.status-badge.logged {
+  border-color: #83bb84;
+  background: #e9f6e8;
+  color: #245b28;
+}
+
+.status-badge.declined,
+.status-badge.call_failed,
+.status-badge.skipped {
+  border-color: #d99a91;
+  background: #fff0ee;
+  color: var(--coral-dark);
 }
 
 .activity-log {
@@ -373,5 +484,9 @@ input[type="text"]:focus,
   .activity-log li {
     grid-template-columns: 1fr;
     gap: 3px;
+  }
+
+  .lead-table {
+    min-width: 760px;
   }
 }

@@ -27,11 +27,18 @@ Object.assign(process.env, {
 
 const { createTwilioRouter } = require("../src/server/routes/twilio");
 
-async function withServer(t, sheetsAdapter) {
+async function withServer(t, sheetsAdapter, options = {}) {
   const app = express();
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
-  app.use("/twilio", createTwilioRouter({ sheetsAdapter, promptAudioUrls: new Map() }));
+  app.use(
+    "/twilio",
+    createTwilioRouter({
+      sheetsAdapter,
+      promptAudioUrls: new Map(),
+      campaignManager: options.campaignManager
+    })
+  );
 
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -62,6 +69,15 @@ function makeSheetsRecorder() {
   };
 }
 
+function assertPromptBeforeGather(twimlText, promptSnippet) {
+  const promptIndex = twimlText.indexOf(promptSnippet);
+  const gatherIndex = twimlText.indexOf("<Gather");
+
+  assert.ok(promptIndex >= 0, `expected prompt containing "${promptSnippet}"`);
+  assert.ok(gatherIndex >= 0, "expected Gather verb");
+  assert.ok(promptIndex < gatherIndex, "expected prompt to finish before speech gather starts");
+}
+
 test("outbound human calls return intro gather TwiML", async (t) => {
   const sheets = makeSheetsRecorder();
   const baseUrl = await withServer(t, sheets.adapter);
@@ -81,7 +97,43 @@ test("outbound human calls return intro gather TwiML", async (t) => {
   assert.match(text, /\/twilio\/voice\/intent\?/);
   assert.match(text, /retry_count=0/);
   assert.match(text, /Hi this is Kevin from Oak and Eagle/);
+  assertPromptBeforeGather(text, "Hi this is Kevin from Oak and Eagle");
   assert.equal(sheets.appended.length, 0);
+});
+
+test("outbound human calls include valid lead city in intro prompt", async (t) => {
+  const sheets = makeSheetsRecorder();
+  const baseUrl = await withServer(t, sheets.adapter);
+
+  const { text } = await postForm(baseUrl, "/twilio/voice/outbound", {
+    lead_id: "lead-city",
+    lead_name: "Ada Lovelace",
+    lead_phone: "+15551234567",
+    lead_city: "Asheville",
+    CallSid: "CA-human-city",
+    AnsweredBy: "human"
+  });
+
+  assert.match(text, /selling your land in Asheville\?/);
+  assert.match(text, /lead_city=Asheville/);
+  assertPromptBeforeGather(text, "selling your land in Asheville?");
+});
+
+test("outbound human calls omit invalid lead city from intro prompt", async (t) => {
+  const sheets = makeSheetsRecorder();
+  const baseUrl = await withServer(t, sheets.adapter);
+
+  const { text } = await postForm(baseUrl, "/twilio/voice/outbound", {
+    lead_id: "lead-invalid-city",
+    lead_name: "Ada Lovelace",
+    lead_phone: "+15551234567",
+    lead_city: "90210",
+    CallSid: "CA-human-invalid-city",
+    AnsweredBy: "human"
+  });
+
+  assert.match(text, /are you interested in selling your land\?/);
+  assert.doesNotMatch(text, /selling your land in 90210/);
 });
 
 test("outbound machine calls get voicemail TwiML and hang up", async (t) => {
@@ -111,6 +163,7 @@ test("intent route branches yes, no, and retry exhaustion", async (t) => {
   assert.match(yes.text, /\/twilio\/voice\/contact\?/);
   assert.match(yes.text, /interest_intent=yes/);
   assert.match(yes.text, /best phone number/);
+  assertPromptBeforeGather(yes.text, "best phone number");
 
   const no = await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-no&CallSid=CA-intent-no", {
     SpeechResult: "no stop calling"
@@ -125,6 +178,7 @@ test("intent route branches yes, no, and retry exhaustion", async (t) => {
   );
   assert.match(retry.text, /retry_count=2/);
   assert.match(retry.text, /did not catch that/);
+  assertPromptBeforeGather(retry.text, "did not catch that");
 
   const exhausted = await postForm(
     baseUrl,
@@ -147,6 +201,7 @@ test("contact route retries unclear numbers and stores valid preferred numbers f
   );
   assert.match(unclear.text, /retry_count=1/);
   assert.match(unclear.text, /could not capture the number/);
+  assertPromptBeforeGather(unclear.text, "could not capture the number");
 
   const captured = await postForm(
     baseUrl,
@@ -169,33 +224,146 @@ test("contact route retries unclear numbers and stores valid preferred numbers f
   assert.equal(sheets.appended[0].lead_name, "Ada Lovelace");
   assert.equal(sheets.appended[0].lead_phone, "+15551234567");
   assert.equal(sheets.appended[0].preferred_phone, "+15557654321");
+  assert.equal(
+    sheets.appended[0].call_transcript,
+    "Preferred phone: call my office\nPreferred phone: 555 765 4321"
+  );
   assert.equal(sheets.appended[0].interest_intent, "yes");
   assert.equal(sheets.appended[0].call_status, "completed");
   assert.match(sheets.appended[0].timestamp_utc, /^\d{4}-\d{2}-\d{2}T/);
 });
 
-test("terminal status callbacks append once and failed calls are marked v/f", async (t) => {
+test("terminal status callbacks append interested leads only", async (t) => {
   const sheets = makeSheetsRecorder();
   const baseUrl = await withServer(t, sheets.adapter);
 
-  const first = await postForm(baseUrl, "/twilio/status", {
+  const failed = await postForm(baseUrl, "/twilio/status", {
     lead_name: "Failure Case",
     lead_phone: "+15550009999",
-    CallSid: "CA-terminal-once",
-    CallStatus: "failed"
-  });
-  const duplicate = await postForm(baseUrl, "/twilio/status", {
-    lead_name: "Failure Case",
-    lead_phone: "+15550009999",
-    CallSid: "CA-terminal-once",
+    CallSid: "CA-terminal-failed",
     CallStatus: "failed"
   });
 
-  assert.equal(first.response.status, 204);
+  const yes = await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-yes-terminal&CallSid=CA-terminal-yes", {
+    SpeechResult: "yes I am interested"
+  });
+  assert.match(yes.text, /\/twilio\/voice\/contact\?/);
+  const contact = await postForm(
+    baseUrl,
+    "/twilio/voice/contact?lead_id=lead-yes-terminal&CallSid=CA-terminal-yes",
+    { SpeechResult: "555 123 4567" }
+  );
+  assert.match(contact.text, /Thank you, we will be in touch soon/);
+
+  const staleYes = await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-stale-yes&CallSid=CA-terminal-no-answer", {
+    SpeechResult: "yes I am interested"
+  });
+  assert.match(staleYes.text, /\/twilio\/voice\/contact\?/);
+  const completedWithoutContact = await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-completed-without-contact&CallSid=CA-terminal-completed-without-contact", {
+    SpeechResult: "yes"
+  });
+  assert.match(completedWithoutContact.text, /\/twilio\/voice\/contact\?/);
+
+  const completed = await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-yes-terminal",
+    lead_name: "Interested Case",
+    lead_phone: "+15550001111",
+    campaign_id: "campaign-yes",
+    CallSid: "CA-terminal-yes",
+    CallStatus: "completed"
+  });
+  const noAnswer = await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-stale-yes",
+    lead_name: "Missed Case",
+    lead_phone: "+15550002222",
+    campaign_id: "campaign-yes",
+    CallSid: "CA-terminal-no-answer",
+    CallStatus: "no-answer"
+  });
+  const completedStrayYes = await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-completed-without-contact",
+    lead_name: "Stray Yes Case",
+    lead_phone: "+15550003333",
+    campaign_id: "campaign-yes",
+    CallSid: "CA-terminal-completed-without-contact",
+    CallStatus: "completed"
+  });
+  const duplicate = await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-yes-terminal",
+    lead_name: "Interested Case",
+    lead_phone: "+15550001111",
+    campaign_id: "campaign-yes",
+    CallSid: "CA-terminal-yes",
+    CallStatus: "completed"
+  });
+
+  assert.equal(failed.response.status, 204);
+  assert.equal(completed.response.status, 204);
+  assert.equal(noAnswer.response.status, 204);
+  assert.equal(completedStrayYes.response.status, 204);
   assert.equal(duplicate.response.status, 204);
   assert.equal(sheets.appended.length, 1);
-  assert.equal(sheets.appended[0].interest_intent, "v/f");
-  assert.equal(sheets.appended[0].call_status, "failed");
+  assert.equal(sheets.appended[0].interest_intent, "yes");
+  assert.equal(sheets.appended[0].call_status, "completed");
+  assert.equal(
+    sheets.appended[0].call_transcript,
+    "Intent: yes I am interested\nPreferred phone: 555 123 4567"
+  );
+});
+
+test("terminal status callbacks notify campaign manager with remove or keep intent", async (t) => {
+  const sheets = makeSheetsRecorder();
+  const outcomes = [];
+  const baseUrl = await withServer(t, sheets.adapter, {
+    campaignManager: {
+      handleCallOutcome: (outcome) => outcomes.push(outcome)
+    }
+  });
+
+  await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-no&campaign_id=campaign-loop&CallSid=CA-manager-no", {
+    SpeechResult: "no stop calling"
+  });
+  await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-no",
+    campaign_id: "campaign-loop",
+    CallSid: "CA-manager-no",
+    CallStatus: "completed"
+  });
+  await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-missed",
+    campaign_id: "campaign-loop",
+    CallSid: "CA-manager-missed",
+    CallStatus: "no-answer"
+  });
+  await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-stale&campaign_id=campaign-loop&CallSid=CA-manager-stale", {
+    SpeechResult: "yes I am interested"
+  });
+  await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-stale",
+    campaign_id: "campaign-loop",
+    CallSid: "CA-manager-stale",
+    CallStatus: "no-answer"
+  });
+  await postForm(baseUrl, "/twilio/voice/intent?lead_id=lead-stray-completed&campaign_id=campaign-loop&CallSid=CA-manager-stray-completed", {
+    SpeechResult: "yes"
+  });
+  await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-stray-completed",
+    campaign_id: "campaign-loop",
+    CallSid: "CA-manager-stray-completed",
+    CallStatus: "completed"
+  });
+
+  assert.equal(sheets.appended.length, 0);
+  assert.equal(outcomes.length, 4);
+  assert.equal(outcomes[0].lead_id, "lead-no");
+  assert.equal(outcomes[0].interest_intent, "no");
+  assert.equal(outcomes[1].lead_id, "lead-missed");
+  assert.equal(outcomes[1].interest_intent, "unknown");
+  assert.equal(outcomes[2].lead_id, "lead-stale");
+  assert.equal(outcomes[2].interest_intent, "unknown");
+  assert.equal(outcomes[3].lead_id, "lead-stray-completed");
+  assert.equal(outcomes[3].interest_intent, "unknown");
 });
 
 test("non-terminal status callbacks are ignored", async (t) => {

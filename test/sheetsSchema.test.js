@@ -17,6 +17,7 @@ test("toSheetRow preserves sheet column order and fills empty values", () => {
       lead_name: "Ada Lovelace",
       lead_phone: "+15551234567",
       preferred_phone: "+15557654321",
+      call_transcript: "Intent: yes\nPreferred phone: 555 765 4321",
       interest_intent: "yes",
       call_status: "completed",
       timestamp_utc: "2026-04-15T00:00:00.000Z"
@@ -27,7 +28,8 @@ test("toSheetRow preserves sheet column order and fills empty values", () => {
       "+15557654321",
       "yes",
       "completed",
-      "2026-04-15T00:00:00.000Z"
+      "2026-04-15T00:00:00.000Z",
+      "Intent: yes\nPreferred phone: 555 765 4321"
     ]
   );
 });
@@ -35,8 +37,9 @@ test("toSheetRow preserves sheet column order and fills empty values", () => {
 test("toSheetRow generates an ISO timestamp when one is not provided", () => {
   const row = toSheetRow({});
 
-  assert.equal(row.length, 6);
+  assert.equal(row.length, 7);
   assert.match(row[5], /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(row[6], "");
 });
 
 test("toIsoTimestamp accepts an explicit Date", () => {

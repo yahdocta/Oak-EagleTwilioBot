@@ -17,10 +17,14 @@ const elements = {
   tunnelStatus: document.querySelector("#tunnelStatus"),
   tunnelDetail: document.querySelector("#tunnelDetail"),
   campaignInput: document.querySelector("#campaignInput"),
+  loopEnabled: document.querySelector("#loopEnabled"),
+  loopIntervalHours: document.querySelector("#loopIntervalHours"),
   startButton: document.querySelector("#startButton"),
   endButton: document.querySelector("#endButton"),
   refreshButton: document.querySelector("#refreshButton"),
   summaryText: document.querySelector("#summaryText"),
+  recurringSummary: document.querySelector("#recurringSummary"),
+  recurringLeadList: document.querySelector("#recurringLeadList"),
   activityLog: document.querySelector("#activityLog"),
   toast: document.querySelector("#toast")
 };
@@ -84,11 +88,13 @@ function renderSummary(state) {
   }
 
   const skippedCount = state.summary.skippedCount || 0;
+  const pendingLeadCount = state.summary.pendingLeadCount ?? state.pendingLeadCount ?? 0;
   elements.summaryText.textContent = [
     `${state.summary.totalLeads} leads`,
     `${state.summary.successCount} calls created`,
     `${state.summary.failureCount} failed`,
-    `${skippedCount} skipped`
+    `${skippedCount} skipped`,
+    `${pendingLeadCount} pending`
   ].join(" | ");
 }
 
@@ -139,6 +145,76 @@ function renderActivity(activity) {
   });
 }
 
+function formatLeadStatus(status) {
+  return String(status || "ready")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function renderRecurringCalls(leads) {
+  elements.recurringLeadList.innerHTML = "";
+
+  if (!leads || leads.length === 0) {
+    elements.recurringSummary.textContent = "No leads uploaded.";
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.className = "empty-cell";
+    cell.textContent = "Upload a CSV to see the recurring call list.";
+    row.appendChild(cell);
+    elements.recurringLeadList.appendChild(row);
+    return;
+  }
+
+  const pendingCount = leads.filter((lead) => lead.isPending).length;
+  const activeCount = leads.filter((lead) => lead.isActive).length;
+  elements.recurringSummary.textContent = `${pendingCount} pending | ${activeCount} active`;
+
+  leads.forEach((lead) => {
+    const row = document.createElement("tr");
+
+    const leadCell = document.createElement("td");
+    const leadName = document.createElement("strong");
+    const leadId = document.createElement("span");
+    leadName.textContent = lead.leadName || "Unnamed lead";
+    leadId.textContent = lead.leadId ? `ID ${lead.leadId}` : "No ID";
+    leadCell.append(leadName, leadId);
+
+    const phoneCell = document.createElement("td");
+    phoneCell.textContent = lead.leadPhone || "No phone";
+
+    const statusCell = document.createElement("td");
+    const statusBadge = document.createElement("span");
+    statusBadge.className = `status-badge ${lead.status || "ready"}`;
+    statusBadge.textContent = formatLeadStatus(lead.status);
+    statusCell.appendChild(statusBadge);
+
+    const callStatusCell = document.createElement("td");
+    callStatusCell.textContent = lead.lastCallStatus || "None";
+
+    const intentCell = document.createElement("td");
+    intentCell.textContent = lead.lastIntent || "None";
+
+    const roundCell = document.createElement("td");
+    roundCell.textContent = lead.round || 0;
+
+    const callSidCell = document.createElement("td");
+    callSidCell.className = "sid-cell";
+    callSidCell.textContent = lead.callSid || "None";
+
+    row.append(
+      leadCell,
+      phoneCell,
+      statusCell,
+      callStatusCell,
+      intentCell,
+      roundCell,
+      callSidCell
+    );
+    elements.recurringLeadList.appendChild(row);
+  });
+}
+
 function renderState(state) {
   const isBusy = state.status === "running" || state.status === "stopping";
   elements.statusValue.textContent = formatStatus(state.status);
@@ -151,6 +227,7 @@ function renderState(state) {
     ? `Uploaded: ${state.uploadedCsv.name}`
     : "No CSV uploaded yet.";
   renderSummary(state);
+  renderRecurringCalls(state.recurringCallList);
   renderActivity(state.activity);
 }
 
@@ -229,7 +306,11 @@ elements.controlForm.addEventListener("submit", async (event) => {
     const response = await fetch(startUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ campaignId: elements.campaignInput.value.trim() })
+      body: JSON.stringify({
+        campaignId: elements.campaignInput.value.trim(),
+        loopEnabled: elements.loopEnabled.checked,
+        loopIntervalHours: elements.loopIntervalHours.value
+      })
     });
     renderState(await readJson(response));
     showToast("Campaign started.");

@@ -41,7 +41,7 @@ function createSheetsAdapter(config) {
 
   async function appendCallOutcome(outcome) {
     const values = [toSheetRow(outcome)];
-    const range = `${config.sheets.sheetName}!A:F`;
+    const range = `${config.sheets.sheetName}!A:G`;
     return withRetry(
       async () =>
         sheets.spreadsheets.values.append({

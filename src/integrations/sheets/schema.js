@@ -20,7 +20,8 @@ function toSheetRow(outcome) {
     outcome.preferred_phone || "",
     toIntentionCategory(outcome.interest_intent),
     outcome.call_status || "",
-    outcome.timestamp_utc || toIsoTimestamp()
+    outcome.timestamp_utc || toIsoTimestamp(),
+    outcome.call_transcript || ""
   ];
 }
 
