@@ -8,6 +8,8 @@
     "dev": "nodemon src/server/app.js",
     "check": "node -e \"require('./src/config').config; console.log('config-ok');\"",
     "run-campaign": "node src/cli/runCampaign.js",
+    "service:print": "node scripts/install-systemd-service.js --print",
+    "service:install": "node scripts/install-systemd-service.js --install",
     "test": "node --test test/*.test.js"
   },
   "engines": {

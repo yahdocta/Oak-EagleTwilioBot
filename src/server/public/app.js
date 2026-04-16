@@ -13,6 +13,7 @@ const elements = {
   controlForm: document.querySelector("#controlForm"),
   csvInput: document.querySelector("#csvInput"),
   dealMachineCsv: document.querySelector("#dealMachineCsv"),
+  recurringExportCsv: document.querySelector("#recurringExportCsv"),
   fileName: document.querySelector("#fileName"),
   uploadedFile: document.querySelector("#uploadedFile"),
   statusValue: document.querySelector("#statusValue"),
@@ -34,6 +35,7 @@ const elements = {
   summaryText: document.querySelector("#summaryText"),
   recurringSort: document.querySelector("#recurringSort"),
   saveRecurringCsvButton: document.querySelector("#saveRecurringCsvButton"),
+  downloadRecurringCsvButton: document.querySelector("#downloadRecurringCsvButton"),
   recurringSummary: document.querySelector("#recurringSummary"),
   recurringTableWrap: document.querySelector("#recurringTableWrap"),
   recurringResizeHandle: document.querySelector("#recurringResizeHandle"),
@@ -49,6 +51,7 @@ const elements = {
 let toastTimer = null;
 let recurringLeadsById = new Map();
 let currentRecurringLeads = [];
+let currentCampaignId = "";
 const recurringTableHeight = {
   min: 220,
   max: 760,
@@ -230,8 +233,15 @@ function formatLeadStatus(status) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function isCompletedCall(lead) {
-  return lead.lastCallStatus === "completed";
+function hasCallDetails(lead) {
+  return Boolean(
+    lead &&
+      (lead.callSid ||
+        lead.callTranscript ||
+        lead.lastCallStatus ||
+        lead.lastIntent ||
+        lead.completedAt)
+  );
 }
 
 function getLeadSortTime(lead) {
@@ -299,7 +309,7 @@ function appendDetail(meta, label, value) {
 
 function openLeadDetail(leadId) {
   const lead = recurringLeadsById.get(leadId);
-  if (!lead || !isCompletedCall(lead)) {
+  if (!lead || !hasCallDetails(lead)) {
     return;
   }
 
@@ -308,6 +318,7 @@ function openLeadDetail(leadId) {
   appendDetail(elements.leadDetailMeta, "Lead ID", lead.leadId);
   appendDetail(elements.leadDetailMeta, "Phone", lead.leadPhone);
   appendDetail(elements.leadDetailMeta, "Address", lead.leadAddress);
+  appendDetail(elements.leadDetailMeta, "Call status", lead.lastCallStatus || "Unknown");
   appendDetail(elements.leadDetailMeta, "Intent", lead.lastIntent || "Unknown");
   appendDetail(elements.leadDetailMeta, "Preferred phone", lead.preferredPhone);
   appendDetail(elements.leadDetailMeta, "Call SID", lead.callSid);
@@ -328,6 +339,114 @@ async function saveRecurringCsv() {
   const payload = await readJson(response);
   renderState(payload.state);
   showToast(`Saved ${payload.savedCsv.name}.`);
+}
+
+const RECURRING_CSV_COLUMNS = [
+  "lead_id",
+  "lead_name",
+  "lead_phone",
+  "lead_address",
+  "lead_city",
+  "status",
+  "last_call_status",
+  "last_intent",
+  "call_sid",
+  "round",
+  "is_pending",
+  "is_active",
+  "completed_at",
+  "preferred_phone",
+  "call_transcript",
+  "updated_at"
+];
+
+function csvCell(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function recurringLeadToCsvRow(lead) {
+  return {
+    lead_id: lead.leadId,
+    lead_name: lead.leadName,
+    lead_phone: lead.leadPhone,
+    lead_address: lead.leadAddress,
+    lead_city: lead.leadCity,
+    status: lead.status,
+    last_call_status: lead.lastCallStatus,
+    last_intent: lead.lastIntent,
+    call_sid: lead.callSid,
+    round: lead.round,
+    is_pending: lead.isPending,
+    is_active: lead.isActive,
+    completed_at: lead.completedAt,
+    preferred_phone: lead.preferredPhone,
+    call_transcript: lead.callTranscript,
+    updated_at: lead.updatedAt
+  };
+}
+
+function serializeRecurringCsv(leads) {
+  const rows = (leads || []).map(recurringLeadToCsvRow);
+  const lines = [
+    RECURRING_CSV_COLUMNS.join(","),
+    ...rows.map((row) => RECURRING_CSV_COLUMNS.map((column) => csvCell(row[column])).join(","))
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function sanitizeDownloadName(value) {
+  return (
+    String(value || "recurring-calls")
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "recurring-calls"
+  );
+}
+
+function makeRecurringCsvFilename() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${sanitizeDownloadName(currentCampaignId || "recurring-calls")}-recurring-calls-${timestamp}.csv`;
+}
+
+function downloadBlob(filename, contents) {
+  const blob = new Blob([contents], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadRecurringCsv() {
+  if (!currentRecurringLeads.length) {
+    showToast("No recurring calls to save.");
+    return;
+  }
+
+  const filename = makeRecurringCsvFilename();
+  const contents = serializeRecurringCsv(currentRecurringLeads);
+  if (window.showSaveFilePicker) {
+    const handle = await window.showSaveFilePicker({
+      suggestedName: filename,
+      types: [
+        {
+          description: "CSV file",
+          accept: { "text/csv": [".csv"] }
+        }
+      ]
+    });
+    const writable = await handle.createWritable();
+    await writable.write(contents);
+    await writable.close();
+    showToast(`Saved ${filename}.`);
+    return;
+  }
+
+  downloadBlob(filename, contents);
+  showToast(`Downloading ${filename}.`);
 }
 
 function renderRecurringCalls(leads) {
@@ -354,7 +473,7 @@ function renderRecurringCalls(leads) {
 
   sortedLeads.forEach((lead) => {
     const row = document.createElement("tr");
-    const canOpenDetails = isCompletedCall(lead);
+    const canOpenDetails = hasCallDetails(lead);
     if (canOpenDetails) {
       row.className = "clickable-row";
       row.tabIndex = 0;
@@ -447,6 +566,7 @@ function renderState(state) {
   const isRunning = state.status === "running";
   const isScheduled = state.status === "scheduled";
   const isBusy = isRunning || state.status === "stopping" || isScheduled;
+  currentCampaignId = state.campaignId || "";
   elements.statusValue.textContent = formatStatus(state.status);
   elements.leadCount.textContent = state.uploadedLeadCount || 0;
   elements.activeCalls.textContent = state.activeCallCount || 0;
@@ -456,6 +576,8 @@ function renderState(state) {
   elements.pauseButton.textContent = state.isPaused ? "Resume Campaign" : "Pause Campaign";
   elements.endButton.disabled = !isBusy;
   elements.saveRecurringCsvButton.disabled =
+    !state.recurringCallList || state.recurringCallList.length === 0;
+  elements.downloadRecurringCsvButton.disabled =
     !state.recurringCallList || state.recurringCallList.length === 0;
   elements.uploadedFile.textContent = state.uploadedCsv
     ? `Uploaded: ${state.uploadedCsv.name}`
@@ -515,6 +637,18 @@ elements.scheduleEnabled.addEventListener("change", () => {
   elements.scheduleStartAt.required = elements.scheduleEnabled.checked;
 });
 
+elements.dealMachineCsv.addEventListener("change", () => {
+  if (elements.dealMachineCsv.checked) {
+    elements.recurringExportCsv.checked = false;
+  }
+});
+
+elements.recurringExportCsv.addEventListener("change", () => {
+  if (elements.recurringExportCsv.checked) {
+    elements.dealMachineCsv.checked = false;
+  }
+});
+
 elements.uploadForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const file = elements.csvInput.files[0];
@@ -527,6 +661,9 @@ elements.uploadForm.addEventListener("submit", async (event) => {
   formData.append("csv", file);
   if (elements.dealMachineCsv.checked) {
     formData.append("dealMachineCsv", "true");
+  }
+  if (elements.recurringExportCsv.checked) {
+    formData.append("recurringExportCsv", "true");
   }
 
   try {
@@ -600,6 +737,19 @@ elements.saveRecurringCsvButton.addEventListener("click", async () => {
     showToast(error.message);
   } finally {
     elements.saveRecurringCsvButton.disabled = currentRecurringLeads.length === 0;
+  }
+});
+
+elements.downloadRecurringCsvButton.addEventListener("click", async () => {
+  elements.downloadRecurringCsvButton.disabled = true;
+  try {
+    await downloadRecurringCsv();
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      showToast(error.message);
+    }
+  } finally {
+    elements.downloadRecurringCsvButton.disabled = currentRecurringLeads.length === 0;
   }
 });
 

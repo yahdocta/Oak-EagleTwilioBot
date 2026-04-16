@@ -297,6 +297,42 @@ test("contact route retries unclear numbers and stores valid preferred numbers f
   assert.match(sheets.appended[0].timestamp_utc, /^\d{4}-\d{2}-\d{2}T/);
 });
 
+test("terminal voicemail status appends when interest was confirmed", async (t) => {
+  const sheets = makeSheetsRecorder();
+  const baseUrl = await withServer(t, sheets.adapter);
+  const callSid = "CA-confirmed-voicemail";
+
+  const yes = await postForm(
+    baseUrl,
+    `/twilio/voice/intent?lead_id=lead-confirmed-voicemail&CallSid=${callSid}`,
+    { SpeechResult: "yes I am interested" }
+  );
+  assert.match(yes.text, /\/twilio\/voice\/contact\?/);
+
+  const contact = await postForm(
+    baseUrl,
+    `/twilio/voice/contact?lead_id=lead-confirmed-voicemail&CallSid=${callSid}`,
+    { SpeechResult: "555 123 4567" }
+  );
+  assert.match(contact.text, /Thank you, we will be in touch soon/);
+
+  const status = await postForm(baseUrl, "/twilio/status", {
+    lead_id: "lead-confirmed-voicemail",
+    lead_name: "Voicemail Interested",
+    lead_phone: "+15550004444",
+    CallSid: callSid,
+    CallStatus: "completed",
+    AnsweredBy: "machine_end_beep"
+  });
+
+  assert.equal(status.response.status, 204);
+  assert.equal(sheets.appended.length, 1);
+  assert.equal(sheets.appended[0].lead_name, "Voicemail Interested");
+  assert.equal(sheets.appended[0].preferred_phone, "+15551234567");
+  assert.equal(sheets.appended[0].interest_intent, "yes");
+  assert.equal(sheets.appended[0].call_status, "voicemail");
+});
+
 test("terminal status callbacks append interested leads only", async (t) => {
   const sheets = makeSheetsRecorder();
   const baseUrl = await withServer(t, sheets.adapter);

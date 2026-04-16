@@ -10,11 +10,14 @@ Your app must be reachable over HTTPS on:
 - `https://<your-domain>/twilio/voice/status`
 - `https://<your-domain>/`
 
-Twilio cannot call `localhost`, so you need a public URL. The intended setup in your spec is:
+Twilio cannot call `localhost`, so you need a public URL. The current host setup is:
 
 - Ubuntu home server
-- Docker + Portainer
+- Node.js app managed by systemd
 - Cloudflare Tunnel
+
+Docker + Portainer is still a reasonable future packaging path, but the current
+repo ships the systemd service helper.
 
 ## 2. Prerequisites checklist
 
@@ -66,12 +69,9 @@ TWILIO_STATUS_CALLBACK_URL=https://calls.yourdomain.com/twilio/voice/status
 
 ## 4. Bring up app on Ubuntu server
 
-Use one of these paths:
+Choose one of the two paths below:
 
-- Path A (quick): run Node directly with PM2/systemd.
-- Path B (recommended): Docker container (better for your target architecture).
-
-### Path A: quick Node runtime
+### Path A: Node runtime with systemd
 
 ```bash
 sudo apt update
@@ -102,7 +102,7 @@ http://localhost:3000/healthz
 http://localhost:3000/
 ```
 
-The `/` route is the campaign console for uploading CSVs, starting one-shot or looping campaigns immediately, scheduling one-shot or looping campaigns for a chosen date/time and time zone, pausing/resuming running campaigns, ending running campaigns, cancelling scheduled campaigns, watching activity, viewing the recurring call list, and checking Cloudflare Tunnel status.
+The `/` route is the campaign console for uploading CSVs, starting one-shot or looping campaigns immediately, scheduling one-shot or looping campaigns for a chosen date/time and time zone, pausing/resuming running campaigns, ending running campaigns, cancelling scheduled campaigns, watching activity, viewing/removing/sorting recurring leads, inspecting transcripts, saving recurring CSV exports, and checking Cloudflare Tunnel status.
 
 By default, `npm start` also launches:
 
@@ -116,10 +116,87 @@ To run the tunnel yourself instead, set:
 CLOUDFLARED_AUTO_START=false
 ```
 
-### Path B: Docker runtime (recommended)
+#### Run 24/7 with systemd
 
-If you want, start a new chat and ask me to generate `Dockerfile` + `docker-compose.yml` for this repo.  
-This is not fully added yet in the codebase.
+For a server that should keep the bot running after you close VS Code or log out
+of SSH, install the app as a `systemd` service from the project directory:
+
+```bash
+Ctrl+C # stop any manual npm start process first
+npm run service:print
+sudo npm run service:install
+```
+
+The generated service:
+
+- runs `npm start` from this checkout
+- loads this checkout's `.env` file when it exists
+- runs as the current server user by default
+- waits for the network to be online
+- restarts automatically if the Node process exits
+- sends `SIGTERM` so the app can shut down Express and Cloudflare Tunnel cleanly
+
+Useful service commands:
+
+```bash
+sudo systemctl status oak-eagle-twilio-bot --no-pager
+sudo systemctl restart oak-eagle-twilio-bot
+sudo systemctl stop oak-eagle-twilio-bot
+journalctl -u oak-eagle-twilio-bot -f
+```
+
+If Node was installed somewhere other than `/usr/bin/npm`, set the path before
+installing:
+
+```bash
+OAK_EAGLE_SERVICE_NPM="$(command -v npm)" sudo -E npm run service:install
+```
+
+The current app keeps active campaign state in memory, so scheduled/running
+campaigns are still reset by service restarts, server reboots, or deploys. The
+service makes the process durable; it does not yet persist live campaign state.
+
+### Path B: Docker runtime with Portainer
+
+If your server has Docker and Portainer already running, use this path for easier
+management and updates.
+
+Deploy app:
+
+```bash
+git clone <your-repo-url>
+cd Oak-EagleTwilioBot
+```
+
+Add `.env` and `service-account.json`, then build and start:
+
+```bash
+docker-compose up -d
+```
+
+Manage the container:
+
+```bash
+docker-compose ps                      # Check status
+docker-compose logs -f oak-eagle-bot   # View live logs
+docker-compose restart                 # Restart
+docker-compose stop                    # Stop
+docker-compose down                    # Stop and remove
+```
+
+Or use Portainer:
+1. Log into Portainer at `https://localhost:9000`
+2. Go to **Stacks** → see `oak-eagle-twilio-bot` listed
+3. Click to view logs, restart, or stop
+
+**Docker automatically:**
+- Restarts the container on failure
+- Persists campaign data and ElevenLabs cache
+- Mounts `.env` and `service-account.json` as read-only
+- Mounts Cloudflare credentials from `~/.cloudflared/`
+- Binds port 3000 on the host
+
+Both systemd and Docker run Node 20 and include `cloudflared`, so tunnel startup and Twilio webhook delivery work identically.
 
 ## 5. Create Cloudflare Tunnel (public HTTPS URL)
 
@@ -189,7 +266,7 @@ In Twilio Console for your phone number (Voice webhook):
 1. Start app.
 2. Confirm startup logs include `cloudflared.starting`.
 3. Open `https://calls.yourdomain.com/`.
-4. Upload a tiny CSV with 1-2 leads. Add an optional `city` or `lead_city` column if you want the opening question to include the city. Add an optional `address` or `lead_address` column if you want the address logged. For a DealMachine export, check `Deal Machine CSV` before uploading so the app converts `contact_id`, `associated_property_address_full`, and `phone_1`/`phone_2`/`phone_3` into the campaign format and derives `lead_city` where possible.
+4. Upload a tiny CSV with 1-2 leads. Add an optional `city` or `lead_city` column if you want the opening question to include the city. Add an optional `address` or `lead_address` column if you want the address logged. For a DealMachine export, check `Deal Machine CSV` before uploading so the app converts `contact_id`, `associated_property_address_full`, and `phone_1`/`phone_2`/`phone_3` into the campaign format and derives `lead_city` where possible. For a previously saved recurring call list, check `Recurring export CSV` before uploading so closed rows are removed and the remaining rows become a normal campaign CSV.
 5. Start the campaign from the page, or check `Schedule for later` and choose a start date/time plus time zone.
 6. Watch the Activity section.
 7. Confirm the Cloudflare Tunnel metric says `Running`.
@@ -218,6 +295,8 @@ Current status:
 - Web console supports loop campaigns and a recurring call list with per-lead status
 - Web console supports scheduled starts for one-shot and loop campaigns
 - Web console supports pausing/resuming running campaigns and cancelling scheduled campaigns
+- Web console supports recurring export CSV import, recurring lead removal, transcript viewing, recurring list sorting, and saving/downloading recurring CSV exports
+- systemd service helper implemented via npm run service:print and sudo npm run service:install
 - Cloudflare Tunnel auto-start implemented through npm start when CLOUDFLARED_AUTO_START=true
 - Cloudflare Tunnel status is exposed at GET /system/status and shown in the web console
 - Intent parsing + phone extraction + interested-lead Sheets adapter implemented
@@ -228,7 +307,7 @@ Need help with:
 1) Validating Ubuntu deployment and startup logs
 2) Validating Cloudflare Tunnel health for calls.yourdomain.com
 3) Twilio webhook wiring and validation calls
-4) Optional Docker + Portainer productionization
+4) Optional Docker + Portainer productionization later, if systemd is not enough
 
 Please guide me step-by-step and wait for my confirmation after each step.
 ```

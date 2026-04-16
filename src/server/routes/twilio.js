@@ -419,7 +419,7 @@ function createTwilioRouter({ sheetsAdapter, elevenLabsTts, promptAudioUrls, cam
       timestamp_utc: new Date().toISOString()
     };
 
-    if (confirmedInterest && finalInterestIntent === "yes" && finalCallStatus === "completed") {
+    if (confirmedInterest && finalInterestIntent === "yes") {
       await sheetsAdapter.appendCallOutcome(outcome);
     }
 

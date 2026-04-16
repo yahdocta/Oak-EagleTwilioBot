@@ -343,6 +343,67 @@ test("campaign UI upload converts DealMachine CSVs when requested", async (t) =>
   );
 });
 
+test("campaign UI upload converts recurring export CSVs when requested", async (t) => {
+  const manager = makeManager();
+  const baseUrl = await withServer(t, manager);
+  const formData = new FormData();
+  formData.append("recurringExportCsv", "true");
+  formData.append(
+    "csv",
+    new Blob(
+      [
+        "lead_id,lead_name,lead_phone,lead_address,lead_city,status,last_call_status,last_intent,call_sid,round,is_pending,is_active,completed_at,preferred_phone,call_transcript,updated_at\n",
+        "lead-1,Ada Lovelace,+15550000001,123 Oak St,Boston,waiting_next_loop,no-answer,unknown,CA-missed,1,true,false,,,,2026-04-15T12:31:00.000Z\n",
+        "lead-2,Grace Hopper,+15550000002,456 Pine St,Arlington,logged,completed,yes,CA-logged,1,false,false,2026-04-15T12:32:00.000Z,+15550009999,Preferred phone: 555 000 9999,2026-04-15T12:33:00.000Z\n"
+      ],
+      { type: "text/csv" }
+    ),
+    "havasu-landlines-recurring-calls.csv"
+  );
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/upload`, {
+    method: "POST",
+    body: formData
+  });
+  const payload = await readJson(response);
+  const savedCsv = fs.readFileSync(manager.calls[0].csvPath, "utf8");
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.uploadedLeadCount, 1);
+  assert.match(path.basename(manager.calls[0].csvPath), /^\d+-havasu-landlines-recurring-calls\.csv$/);
+  assert.equal(
+    savedCsv,
+    [
+      "lead_id,lead_name,lead_phone,lead_address,lead_city",
+      "lead-1,Ada Lovelace,+15550000001,123 Oak St,Boston",
+      ""
+    ].join("\n")
+  );
+});
+
+test("campaign UI upload rejects multiple CSV import formats", async (t) => {
+  const manager = makeManager();
+  const baseUrl = await withServer(t, manager);
+  const formData = new FormData();
+  formData.append("dealMachineCsv", "true");
+  formData.append("recurringExportCsv", "true");
+  formData.append(
+    "csv",
+    new Blob(["lead_id,lead_name,lead_phone,status\n1,Ada,+15550000001,ready\n"], { type: "text/csv" }),
+    "leads.csv"
+  );
+
+  const response = await fetch(`${baseUrl}/campaigns/ui/upload`, {
+    method: "POST",
+    body: formData
+  });
+  const payload = await readJson(response);
+
+  assert.equal(response.status, 400);
+  assert.equal(payload.error, "Choose only one CSV import format.");
+  assert.equal(manager.calls.length, 0);
+});
+
 test("campaign UI upload rejects non-CSV files", async (t) => {
   const manager = makeManager();
   const baseUrl = await withServer(t, manager);

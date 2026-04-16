@@ -53,6 +53,8 @@ Use this file as the quick orientation map before changing the project. The full
 | ElevenLabs TTS/cache | `src/integrations/elevenlabs/index.js` |
 | Config validation | `src/config/index.js` |
 | JSON logger | `src/utils/logger.js` |
+| Docker image config | `Dockerfile` |
+| Docker Compose config | `docker-compose.yml` |
 
 ## Common Task Routing
 
@@ -112,6 +114,7 @@ If the user asks about deployment:
 - Start with `docs/server-setup-guide.md`.
 - Then check `src/config/index.js` for required environment variables and validation rules.
 - Check `src/server/cloudflared.js` if the issue involves Cloudflare Tunnel process startup.
+- Use **systemd** (Path A) for direct Node.js deployment, or **Docker + Portainer** (Path B) if Docker is already running on the server.
 
 ## Operational Notes
 

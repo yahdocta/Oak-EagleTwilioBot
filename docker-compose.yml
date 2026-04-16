@@ -1,0 +1,63 @@
+version: '3.9'
+
+services:
+  oak-eagle-bot:
+    image: oak-eagle-twilio-bot:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: oak-eagle-twilio-bot
+    
+    # Run as the yahdocta user so paths match npm start
+    user: "1000:1000"
+    
+    # Restart policy for 24/7 operation
+    restart: unless-stopped
+    
+    # Port mapping
+    ports:
+      - "3000:3000"
+    
+    # Volumes for persistent data
+    volumes:
+      # Config files
+      - ./.env:/app/.env:ro
+      - ./service-account.json:/app/service-account.json:ro
+      
+      # Campaign data
+      - ./campaign-inputs:/app/campaign-inputs
+      
+      # ElevenLabs cache
+      - ./.cache/elevenlabs:/app/.cache/elevenlabs
+      
+      # Cloudflare tunnel config (mount at /home/yahdocta/.cloudflared for yahdocta user)
+      - ~/.cloudflared:/home/yahdocta/.cloudflared:ro
+    
+    # Load environment from .env file
+    env_file:
+      - .env
+    
+    # Override with explicit paths for container
+    environment:
+      - CLOUDFLARED_CONFIG=/home/yahdocta/.cloudflared/config.yml
+    
+    # Resource limits (optional, adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 1G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 512M
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Network (optional, uses default bridge)
+    networks:
+      - default

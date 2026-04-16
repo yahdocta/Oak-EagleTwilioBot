@@ -16,8 +16,9 @@ for natural voice prompts, and Google Sheets as the interested-lead log.
 It also includes a small browser campaign console. From the web UI, you can
 upload a CSV, start a campaign immediately or schedule it for a chosen date,
 time, and time zone, optionally run the campaign in a recurring loop, pause or
-end a running campaign, monitor campaign activity, view each lead's campaign
-status, and check the Cloudflare Tunnel status.
+end a running campaign, monitor campaign activity, sort and manage the recurring
+call list, inspect call transcripts, export remaining recurring leads, and check
+the Cloudflare Tunnel status.
 
 At a high level, the call flow is:
 
@@ -68,6 +69,11 @@ full addresses like `Eliot Ln, Albrightsville, Pa 18210`. If an address field
 contains only a city-like value such as `laguna beach`, the opening question can
 use that value as the city.
 
+Recurring call list exports can be uploaded back into the web UI by checking
+`Recurring export CSV`. The importer keeps dialable rows, drops closed statuses
+such as `logged`, `declined`, and `removed`, and converts the file back to the
+normal campaign CSV columns.
+
 ## Web UI
 
 Start the server:
@@ -76,7 +82,38 @@ Start the server:
 npm start
 ```
 
+Or use Docker (if already installed):
+
+```bash
+docker-compose up -d
+docker-compose logs -f oak-eagle-bot
+```
+
 The server also starts the configured Cloudflare Tunnel by default, using `~/.cloudflared/config.yml`.
+
+To keep the bot running 24/7 after closing VS Code or SSH, use either:
+
+**Option 1: systemd (Node.js runtime)**
+```bash
+Ctrl+C # stop any manual npm start process first
+npm run service:print
+sudo npm run service:install
+```
+
+Then inspect logs with:
+
+```bash
+journalctl -u oak-eagle-twilio-bot -f
+```
+
+**Option 2: Docker + docker-compose**
+```bash
+docker-compose up -d              # Start
+docker-compose logs -f oak-eagle-bot  # View logs
+docker-compose restart            # Restart
+```
+
+For full deployment and troubleshooting, see [docs/server-setup-guide.md](docs/server-setup-guide.md).
 
 Open the campaign console:
 
@@ -84,15 +121,18 @@ Open the campaign console:
 http://SERVER_IP:3000/
 ```
 
-Use the page to upload a normal campaign CSV or a checked `Deal Machine CSV`,
-start a one-shot or looping campaign immediately, schedule a one-shot or looping
-campaign for later, pause/resume a running campaign, cancel a scheduled campaign,
-end a running campaign, monitor activity, view the recurring call list with
-per-lead statuses, and check Cloudflare Tunnel status. If you are accessing it
-from another computer, make sure the server firewall allows the configured
-`PORT`.
+Use the page to upload a normal campaign CSV, checked `Deal Machine CSV`, or
+checked `Recurring export CSV`, start a one-shot or looping campaign immediately,
+schedule a one-shot or looping campaign for later, pause/resume a running
+campaign, cancel a scheduled campaign, end a running campaign, monitor activity,
+view and sort the recurring call list, remove individual recurring leads, inspect
+captured transcripts, save/download recurring CSV exports, and check Cloudflare
+Tunnel status. If you are accessing it from another computer, make sure the
+server firewall allows the configured `PORT`.
 
 In loop mode, no-answer/unresolved leads stay in the campaign and are called
 again after the configured interval. Leads that clearly say no are marked
 declined and removed. Leads that confirm interest are logged to Google Sheets,
 marked logged, and removed.
+
+Saved recurring CSV exports are written under `campaign-inputs/exports/`.

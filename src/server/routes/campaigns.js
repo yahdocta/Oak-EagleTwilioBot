@@ -5,6 +5,7 @@ const path = require("path");
 const { config } = require("../../config");
 const { startCampaign } = require("../../campaigns");
 const { convertDealMachineCsvFile } = require("../../campaigns/dealMachineCsv");
+const { convertRecurringExportCsvFile } = require("../../campaigns/recurringExportCsv");
 const { CampaignManager } = require("../campaignManager");
 
 const uploadDir = path.resolve("campaign-inputs", "uploads");
@@ -71,8 +72,17 @@ function createCampaignRouter(options = {}) {
         return res.status(400).json({ error: "CSV upload is required." });
       }
 
-      if (isChecked(req.body.dealMachineCsv)) {
+      const dealMachineCsv = isChecked(req.body.dealMachineCsv);
+      const recurringExportCsv = isChecked(req.body.recurringExportCsv);
+      if (dealMachineCsv && recurringExportCsv) {
+        return res.status(400).json({ error: "Choose only one CSV import format." });
+      }
+
+      if (dealMachineCsv) {
         convertDealMachineCsvFile(req.file.path);
+      }
+      if (recurringExportCsv) {
+        convertRecurringExportCsvFile(req.file.path);
       }
 
       const state = manager.setUploadedCsv(req.file.path);

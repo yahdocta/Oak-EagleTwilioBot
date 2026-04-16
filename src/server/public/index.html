@@ -56,6 +56,10 @@
             <input id="dealMachineCsv" name="dealMachineCsv" type="checkbox" />
             Deal Machine CSV
           </label>
+          <label class="checkbox-row" for="recurringExportCsv">
+            <input id="recurringExportCsv" name="recurringExportCsv" type="checkbox" />
+            Recurring export CSV
+          </label>
           <button type="submit">Upload CSV</button>
           <p id="uploadedFile" class="muted">No CSV uploaded yet.</p>
         </form>
@@ -114,6 +118,7 @@
               <option value="intent">Intent</option>
             </select>
             <button id="saveRecurringCsvButton" type="button" class="secondary">Save CSV</button>
+            <button id="downloadRecurringCsvButton" type="button" class="secondary">Save As...</button>
             <span id="recurringSummary" class="muted">No leads uploaded.</span>
           </div>
         </div>

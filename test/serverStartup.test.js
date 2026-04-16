@@ -209,6 +209,7 @@ test("static web UI includes recurring call list hooks", async (t) => {
   assert.match(html, /id="recurringSummary"/);
   assert.match(html, /id="recurringSort"/);
   assert.match(html, /id="saveRecurringCsvButton"/);
+  assert.match(html, /id="downloadRecurringCsvButton"/);
   assert.match(html, /id="recurringLeadList"/);
   assert.match(html, /id="recurringTableWrap"/);
   assert.match(html, /id="recurringResizeHandle"/);
@@ -223,6 +224,8 @@ test("static web UI includes recurring call list hooks", async (t) => {
   assert.match(js, /function openLeadDetail/);
   assert.match(js, /removeRecurringLead/);
   assert.match(js, /saveRecurringCsv/);
+  assert.match(js, /downloadRecurringCsv/);
+  assert.match(js, /showSaveFilePicker/);
   assert.match(js, /recurringCallList/);
   assert.match(js, /recurringSort/);
   assert.match(css, /\.lead-table/);
