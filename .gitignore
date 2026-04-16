@@ -5,3 +5,21 @@ service-account.json
 *.log
 campaign-inputs/*
 !campaign-inputs/.gitkeep
+
+# Cache and build outputs
+.cache/
+dist/
+build/
+*.tsbuildinfo
+
+# OS and IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.env.local
+
+# Local Cloudflare config
+.cloudflared/
